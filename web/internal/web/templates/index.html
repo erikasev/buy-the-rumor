@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="htmx-config" content='{"includeIndicatorStyles": false}'>
+  <title>Buy the Rumor</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/htmx.min.js" defer></script>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Buy the Rumor</h1>
+      <p class="lead">Pick a theme. Our agents read the market and write a trading brief your Coinbase agent can follow.</p>
+    </header>
+
+    <form hx-post="/briefs" hx-target="#result" hx-swap="innerHTML" hx-disabled-elt="find button">
+      <label for="theme">Theme</label>
+      <div class="row">
+        <input id="theme" name="theme" type="text" maxlength="100" required
+               placeholder="e.g. AI and compute, payments, gaming" autocomplete="off">
+        <button type="submit">Generate brief</button>
+      </div>
+    </form>
+
+    <section id="result" aria-live="polite"></section>
+
+    <footer>
+      <p>Research and decision support, not investment advice. You decide whether any agent runs a brief.</p>
+    </footer>
+  </main>
+</body>
+</html>
