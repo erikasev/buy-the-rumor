@@ -50,6 +50,18 @@ class BriefFrontmatter(BaseModel):
     positions: list[Position] = Field(min_length=1)
 
 
+class BriefView(BriefFrontmatter):
+    """The structured brief the web page renders: <job_id>.json beside <job_id>.md.
+
+    Same fields as the frontmatter, plus the risk level and the two prose sections.
+    It never contains sources: they stay internal (docs/adr/0001-data-sources-stay-internal.md).
+    """
+
+    risk_level: int = Field(ge=0, le=100)
+    thesis: str = Field(min_length=1)
+    risks: str = Field(min_length=1)
+
+
 def split_frontmatter(markdown: str) -> tuple[str, str]:
     """Return (yaml_text, body). The file must start with a '---' line."""
     lines = markdown.lstrip("﻿").splitlines(keepends=True)

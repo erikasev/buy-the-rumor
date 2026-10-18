@@ -118,9 +118,22 @@ The web service may show these to the user, mapped to friendly text it owns (e.g
 | Key | Content type | Written by |
 | --- | --- | --- |
 | `briefs/YYYY/MM/DD/<job_id>.md` | `text/markdown` | worker |
-| `briefs/YYYY/MM/DD/<job_id>.sources.json` | `application/json` | worker |
+| `briefs/YYYY/MM/DD/<job_id>.json` | `application/json` | worker (the brief view, below) |
+| `briefs/YYYY/MM/DD/<job_id>.sources.json` | `application/json` | worker; internal only, never served (ADR-0001) |
 
 The date parts come from `created_at`. The web service always reads the key from `s3_key` and never builds it itself.
+
+## Brief view (`<job_id>.json`)
+
+The structured form of the brief, which the web page renders. It has the brief's frontmatter fields (`schema_version`, `brief_id`, `theme`, `generated_at`, `expires_at`, `constraints`, `positions`) plus:
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `risk_level` | integer | 0 to 100, as requested |
+| `thesis` | string | Plain text, may contain line breaks |
+| `risks` | string | Plain text: what could go wrong and what would change the plan |
+
+It never contains sources or citation markers (ADR-0001). The worker writes it after the brief passes validation, from the same data as the `.md`. If it is missing or unreadable, the web page falls back to showing the raw `.md`. Example: `contracts/fixtures/brief_view.json`.
 
 ## Fixtures and contract tests
 
@@ -128,5 +141,6 @@ Example files live in `contracts/fixtures/`:
 
 - `message.valid.json`, `message.missing_theme.json`
 - `record.queued.json`, `record.succeeded.json`, `record.failed.json`
+- `brief_view.json`
 
 The Go tests and the Python tests both load these files. Valid fixtures must parse; invalid ones must be rejected. If either side's types drift from this document, CI fails.

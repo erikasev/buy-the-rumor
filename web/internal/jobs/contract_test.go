@@ -102,6 +102,42 @@ func TestRiskLevelOutOfRangeIsRejected(t *testing.T) {
 	}
 }
 
+func TestBriefViewFixtureDecodes(t *testing.T) {
+	var v BriefView
+	if err := json.Unmarshal(readFixture(t, "brief_view.json"), &v); err != nil {
+		t.Fatal(err)
+	}
+	if v.SchemaVersion != 1 || len(v.Positions) != 2 || v.Constraints.MaxPositionPct != 25 || v.Thesis == "" {
+		t.Errorf("decoded view = %+v", v)
+	}
+	// What we write must use exactly the fixture's field names.
+	ours, _ := json.Marshal(v)
+	if got, want := keys(t, ours), keys(t, readFixture(t, "brief_view.json")); got != want {
+		t.Errorf("fields = %s, want %s", got, want)
+	}
+}
+
+func TestSampleViewFollowsRiskAndStaysWithinLimits(t *testing.T) {
+	gen := time.Date(2026, 10, 21, 13, 0, 0, 0, time.UTC)
+	for _, risk := range []int{0, 40, 100} {
+		v := SampleView(Message{JobID: "01JADQ7Y3K8V5C2N9W4R6T1M0P", Theme: "Biotech", RiskLevel: risk}, gen)
+		total := 0.0
+		for _, p := range v.Positions {
+			if p.AllocationPct > v.Constraints.MaxPositionPct {
+				t.Errorf("risk %d: %s %.0f%% exceeds %.0f%%", risk, p.Asset, p.AllocationPct, v.Constraints.MaxPositionPct)
+			}
+			total += p.AllocationPct
+		}
+		if total > 100 {
+			t.Errorf("risk %d: total %.0f%%", risk, total)
+		}
+		md := SampleMarkdown(v)
+		if !strings.Contains(md, `theme: "Biotech"`) || strings.Contains(md, "Sources") {
+			t.Errorf("risk %d: markdown does not match the view:\n%s", risk, md)
+		}
+	}
+}
+
 func TestTransitions(t *testing.T) {
 	cases := []struct {
 		from, to Status
