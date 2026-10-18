@@ -1,9 +1,19 @@
 import json
+from datetime import datetime, timezone
 
 import pytest
 from pydantic import ValidationError
 
-from app.contract import JobError, JobMessage, can_transition
+from app.contract import (
+    ULID_PATTERN,
+    JobError,
+    JobFailure,
+    JobMessage,
+    brief_key,
+    can_transition,
+    new_ulid,
+    sources_key,
+)
 from app.handler import lambda_handler
 
 
@@ -29,7 +39,7 @@ def test_unknown_message_fields_are_ignored(fixture_text):
         ("schema_version", 2),
         ("job_id", "not-a-ulid"),
         ("theme", "   "),
-        ("theme", "x" * 101),
+        ("theme", "x" * 1001),
         ("requested_at", "2026-10-21T13:00:00"),  # no timezone
     ],
 )
@@ -66,22 +76,63 @@ def test_status_transitions(current, new, allowed):
     assert can_transition(current, new) is allowed
 
 
+def test_new_ulid_matches_contract_pattern():
+    import re
+
+    ids = {new_ulid() for _ in range(100)}
+    assert len(ids) == 100
+    assert all(re.match(ULID_PATTERN, i) for i in ids)
+    early, late = (
+        new_ulid(datetime(2026, 1, 1, tzinfo=timezone.utc)),
+        new_ulid(datetime(2026, 6, 1, tzinfo=timezone.utc)),
+    )
+    assert early < late  # sorts by time
+
+
+def test_s3_keys_follow_contract(fixture_text):
+    record = json.loads(fixture_text("record.succeeded.json"))
+    created = datetime.fromisoformat(record["created_at"])
+    assert brief_key(record["job_id"], created) == record["s3_key"]
+    assert sources_key(record["job_id"], created) == record["s3_key"].replace(".md", ".sources.json")
+
+
+def test_job_failure_message_fits_contract():
+    f = JobFailure("validation", "LIMIT_EXCEEDED", "x" * 500)
+    assert len(f.error.message) == 300
+
+
 def _sqs_event(*bodies):
-    return {"Records": [{"messageId": f"m{i}", "body": b} for i, b in enumerate(bodies)]}
+    return {
+        "Records": [
+            {"messageId": f"m{i}", "body": b, "attributes": {"ApproximateReceiveCount": "2"}}
+            for i, b in enumerate(bodies)
+        ]
+    }
 
 
-def test_handler_accepts_valid_message(fixture_text):
+@pytest.fixture
+def ran(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        "app.handler.run_job", lambda msg, receive_count: calls.append((msg.job_id, receive_count))
+    )
+    return calls
+
+
+def test_handler_runs_valid_message(fixture_text, ran):
     result = lambda_handler(_sqs_event(fixture_text("message.valid.json")), None)
     assert result == {"batchItemFailures": []}
+    assert ran == [("01JADQ7Y3K8V5C2N9W4R6T1M0P", 2)]
 
 
-def test_handler_drops_malformed_message_without_retry(fixture_text):
+def test_handler_drops_malformed_message_without_retry(fixture_text, ran):
     result = lambda_handler(_sqs_event("{not json", fixture_text("message.valid.json")), None)
     assert result == {"batchItemFailures": []}
+    assert len(ran) == 1
 
 
 def test_handler_reports_crashed_job_for_retry(fixture_text, monkeypatch):
-    def boom(msg):
+    def boom(msg, receive_count):
         raise RuntimeError("pipeline failed")
 
     monkeypatch.setattr("app.handler.run_job", boom)

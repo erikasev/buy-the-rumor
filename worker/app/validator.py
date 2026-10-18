@@ -6,13 +6,26 @@ Each rule returns a Violation with a stable `rule` name so tests and error
 messages can refer to it.
 """
 
+import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from app.brief import BriefFrontmatter
+from app.brief import BriefFrontmatter, Constraints
 
 MAX_VALIDITY = timedelta(hours=24)
 ALLOCATION_TOLERANCE = 1e-6  # floats like 33.3 + 33.3 + 33.4
+
+# The loosest constraints any brief may carry (design.md: $100 test budget, 25% per
+# position, limit orders only, 8% stop-loss). A brief's own `constraints` block may be
+# stricter, never looser, so an LLM can't relax the rules by rewriting them.
+HARD_LIMITS = Constraints(
+    max_total_usd=100,
+    max_position_pct=25,
+    allowed_order_types=["limit"],
+    stop_loss_pct=8,
+)
+
+CITATION = re.compile(r"\[([A-Z]+\d+)\]")
 
 
 @dataclass(frozen=True)
@@ -25,6 +38,23 @@ def validate_brief(fm: BriefFrontmatter, now: datetime) -> list[Violation]:
     """Return every violation found. An empty list means the brief is valid."""
     v: list[Violation] = []
     c = fm.constraints
+    h = HARD_LIMITS
+
+    # The brief's own limits must sit inside the hard limits
+    if c.max_total_usd > h.max_total_usd:
+        v.append(Violation("budget_too_high", f"The budget may be at most ${h.max_total_usd:g}."))
+    if c.max_position_pct > h.max_position_pct:
+        v.append(
+            Violation(
+                "position_limit_too_high", f"The per-position limit may be at most {h.max_position_pct:g}%."
+            )
+        )
+    if not set(c.allowed_order_types) <= set(h.allowed_order_types):
+        v.append(
+            Violation("order_types_too_loose", f"Only {', '.join(h.allowed_order_types)} orders are allowed.")
+        )
+    if c.stop_loss_pct > h.stop_loss_pct:
+        v.append(Violation("stop_loss_too_wide", f"The stop-loss may be at most {h.stop_loss_pct:g}%."))
 
     # Time window
     if fm.expires_at <= fm.generated_at:
@@ -73,3 +103,21 @@ def validate_brief(fm: BriefFrontmatter, now: datetime) -> list[Violation]:
         v.append(Violation("total_allocation", f"Buy allocations sum to {total:g}%, above 100%."))
 
     return v
+
+
+def validate_citations(body: str, source_ids: set[str], require: bool = True) -> list[Violation]:
+    """Every [ID] cited in the body must be a source we collected. With `require` (any brief
+    that trades), there must be at least one. Ranges like [X1-X5] don't count as citations."""
+    cited = set(CITATION.findall(body))
+    if not cited and require:
+        return [
+            Violation(
+                "no_citations", "Every trade must be backed by a cited source, written like [X3] (no ranges)."
+            )
+        ]
+    unknown = sorted(cited - source_ids)
+    if unknown:
+        return [
+            Violation("unknown_source", f"The brief cites sources that do not exist: {', '.join(unknown)}.")
+        ]
+    return []

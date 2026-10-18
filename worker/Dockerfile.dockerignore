@@ -1,0 +1,8 @@
+# Build context is the repo root. Allowlist: only what the image needs. Secrets
+# (.env.local) and everything else stay out.
+*
+!settings.yaml
+!worker/requirements.txt
+!worker/app/
+**/__pycache__
+**/*.pyc

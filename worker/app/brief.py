@@ -5,6 +5,8 @@ the body is prose for the agent. This module only checks shape and types.
 Hard risk limits live in validator.py.
 """
 
+from __future__ import annotations
+
 from typing import Literal
 
 import yaml
@@ -43,7 +45,7 @@ class BriefFrontmatter(BaseModel):
 
     brief_id: str = Field(min_length=1)
     schema_version: Literal[1]
-    theme: str = Field(min_length=1, max_length=100)
+    theme: str = Field(min_length=1, max_length=1000)
     generated_at: AwareDatetime
     expires_at: AwareDatetime
     constraints: Constraints

@@ -4,12 +4,15 @@ Only what crosses the web / worker boundary lives here. If this file and the
 contract document disagree, the document wins and this file is the bug.
 """
 
+import os
+from datetime import datetime, timezone
 from typing import Literal
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
 # Crockford base32, 26 characters, first character 0-7.
 ULID_PATTERN = r"^[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+_CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 
 JobStatus = Literal["QUEUED", "RUNNING", "SUCCEEDED", "FAILED"]
 
@@ -53,7 +56,7 @@ class JobMessage(BaseModel):
 
     schema_version: Literal[1]
     job_id: str = Field(pattern=ULID_PATTERN)
-    theme: str = Field(min_length=1, max_length=100)
+    theme: str = Field(min_length=1, max_length=1000)
     requested_at: AwareDatetime
 
 
@@ -63,3 +66,32 @@ class JobError(BaseModel):
     stage: Stage
     code: ErrorCode
     message: str = Field(min_length=1, max_length=300)
+
+
+class JobFailure(Exception):
+    """Raised by a pipeline stage to end the job as FAILED. `error.message` is shown to users."""
+
+    def __init__(self, stage: Stage, code: ErrorCode, message: str):
+        super().__init__(message)
+        self.error = JobError(stage=stage, code=code, message=message[:300])
+
+
+def new_ulid(now: datetime | None = None) -> str:
+    """A ULID: 48-bit millisecond timestamp plus 80 random bits, in Crockford base32."""
+    ms = int((now or datetime.now(timezone.utc)).timestamp() * 1000)
+    value = (ms << 80) | int.from_bytes(os.urandom(10), "big")
+    return "".join(_CROCKFORD[(value >> (5 * i)) & 31] for i in reversed(range(26)))
+
+
+def brief_key(job_id: str, created_at: datetime) -> str:
+    """S3 key of a brief. The date parts come from the record's created_at."""
+    return f"briefs/{created_at.astimezone(timezone.utc):%Y/%m/%d}/{job_id}.md"
+
+
+def sources_key(job_id: str, created_at: datetime) -> str:
+    return brief_key(job_id, created_at).removesuffix(".md") + ".sources.json"
+
+
+def utc_iso(dt: datetime) -> str:
+    """The contract's timestamp format: ISO 8601, UTC, Z suffix, whole seconds."""
+    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
