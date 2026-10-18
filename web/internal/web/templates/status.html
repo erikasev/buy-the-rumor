@@ -1,0 +1,23 @@
+<div class="card" id="job-{{.ID}}"
+  {{- if .Polling}} hx-get="/briefs/{{.ID}}" hx-trigger="every 2s" hx-swap="outerHTML"{{end}}>
+  <p class="meta">Theme: <strong>{{.Theme}}</strong></p>
+
+  {{if eq .Status "QUEUED"}}
+    <p class="state">Queued. Waiting for an agent…</p>
+  {{else if eq .Status "RUNNING"}}
+    <p class="state">{{if .StageLabel}}{{.StageLabel}}{{else}}Starting{{end}}…</p>
+    <progress max="{{.StepTotal}}" value="{{.StepNum}}">{{.StepNum}} of {{.StepTotal}}</progress>
+  {{else if eq .Status "SUCCEEDED"}}
+    {{if .Error}}
+      <p class="state error">{{.Error}}</p>
+    {{else}}
+      <div class="actions">
+        <p class="state ok">Brief ready</p>
+        <a class="button" href="/briefs/{{.ID}}.md" download>Download .md</a>
+      </div>
+      <pre class="brief">{{.Brief}}</pre>
+    {{end}}
+  {{else if eq .Status "FAILED"}}
+    <p class="state error">{{.Error}}</p>
+  {{end}}
+</div>
