@@ -54,6 +54,8 @@ class JobMessage(BaseModel):
     schema_version: Literal[1]
     job_id: str = Field(pattern=ULID_PATTERN)
     theme: str = Field(min_length=1, max_length=100)
+    # Added in v1 as an optional field: readers default to 50 when it is absent.
+    risk_level: int = Field(default=50, ge=0, le=100)
     requested_at: AwareDatetime
 
 
