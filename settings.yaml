@@ -1,0 +1,52 @@
+version: "1.0"
+project_name: "agent"
+environment: "development" # "development" (testnet/sandbox) | "production"
+
+# ---------------------------------------------------------
+# LLM Orchestrator Configuration
+# ---------------------------------------------------------
+agent:
+  provider: "openai" # "openai" | "anthropic" | "local"
+  model: "gpt-4o"
+  temperature: 0.1 # Low temperature for disciplined, deterministic trade evaluation
+  max_iterations: 10 # Safety limit on reasoning loop steps per turn
+  system_instructions: |
+    You are a risk-averse execution agent. Always verify guardrails
+    before requesting quote generation or signing a transaction.
+
+# ---------------------------------------------------------
+# Twitter Accounts
+# ---------------------------------------------------------
+twitter:
+  # Accounts to Track
+  accounts:
+    - '@JulianKlymochko'
+    - '@AlderLaneEggs'
+    - '@FedGuy12'
+    - '@agnostoxxx'
+    - '@Ed_Fin'
+    - '@TankerTrackers'
+    - '@JavierBlas'
+    - '@BurggrabenH'
+    - '@LSREnergy'
+    - '@dylan522p'
+    - '@davereeth'
+    - '@dampedspring'
+    - '@crossbordercap'
+    - '@BobEUnlimited'
+    - '@DiMartinoBooth'
+    - '@MacroAlf'
+    - '@LynAldenContact'
+    - '@LukeGromen'
+    - '@JeffSnider_EDU'
+    - '@cangsizhi'
+    - '@blondesnmoney'
+    - '@hkuppy'
+    - '@AndyBiotech'
+    - '@lookonchain'
+
+# ---------------------------------------------------------
+# AWS
+# ---------------------------------------------------------
+bucket_name: "hackathon-btr-351611731335-us-east-2-an"
+
