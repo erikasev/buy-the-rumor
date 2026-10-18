@@ -1,0 +1,15 @@
+{
+  "job_id": "01JADQ7Y3K8V5C2N9W4R6T1M0P",
+  "schema_version": 1,
+  "theme": "AI and compute",
+  "status": "FAILED",
+  "stage": "validation",
+  "created_at": "2026-10-21T13:00:00Z",
+  "updated_at": "2026-10-21T13:02:41Z",
+  "error": {
+    "stage": "validation",
+    "code": "LIMIT_EXCEEDED",
+    "message": "Allocations sum to 115%, above the 100% limit."
+  },
+  "ttl": 1795179600
+}
