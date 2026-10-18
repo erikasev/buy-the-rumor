@@ -57,6 +57,8 @@ class JobMessage(BaseModel):
     schema_version: Literal[1]
     job_id: str = Field(pattern=ULID_PATTERN)
     theme: str = Field(min_length=1, max_length=1000)
+    # Added in v1 as an optional field: readers default to 50 when it is absent.
+    risk_level: int = Field(default=50, ge=0, le=100)
     requested_at: AwareDatetime
 
 
@@ -88,7 +90,13 @@ def brief_key(job_id: str, created_at: datetime) -> str:
     return f"briefs/{created_at.astimezone(timezone.utc):%Y/%m/%d}/{job_id}.md"
 
 
+def view_key(job_id: str, created_at: datetime) -> str:
+    """The structured brief view the web page renders (contract, "Brief view")."""
+    return brief_key(job_id, created_at).removesuffix(".md") + ".json"
+
+
 def sources_key(job_id: str, created_at: datetime) -> str:
+    """Internal evidence. Never served to users (ADR-0001)."""
     return brief_key(job_id, created_at).removesuffix(".md") + ".sources.json"
 
 

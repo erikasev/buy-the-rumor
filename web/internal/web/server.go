@@ -4,11 +4,14 @@ package web
 
 import (
 	"embed"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"html/template"
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -103,13 +106,23 @@ func (s *Server) createBrief(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	risk := jobs.DefaultRiskLevel
+	if raw := r.PostFormValue("risk_level"); raw != "" {
+		v, err := strconv.Atoi(raw)
+		if err != nil || !jobs.ValidRisk(v) {
+			s.renderError(w, http.StatusBadRequest, "Risk level must be between 0 and 100.")
+			return
+		}
+		risk = v
+	}
+
 	now := s.Now()
 	id, err := s.NewID(now)
 	if err != nil {
 		s.fail(w, "new job id", err)
 		return
 	}
-	rec := jobs.NewRecord(id, theme, now)
+	rec := jobs.NewRecord(id, theme, risk, now)
 
 	// Write the record before sending the message, so the worker never sees a
 	// job that doesn't exist yet. If the send fails, the orphaned QUEUED record
@@ -166,19 +179,96 @@ func (s *Server) getBrief(w http.ResponseWriter, r *http.Request) {
 type statusView struct {
 	ID         string
 	Theme      string
+	RiskLevel  int
+	RiskWord   string
 	Status     jobs.Status
 	Polling    bool
 	StageLabel string
 	StepNum    int
 	StepTotal  int
 	Brief      string
+	View       *briefView
 	Error      string
+}
+
+// briefView is a BriefView formatted for the page.
+type briefView struct {
+	ExpiresIn  string
+	Expired    bool
+	MaxTotal   string
+	MaxPos     string
+	StopLoss   string
+	OrderTypes string
+	Positions  []positionRow
+	Thesis     string
+	Risks      string
+}
+
+type positionRow struct {
+	Asset      string
+	Action     string
+	Trade      bool
+	Allocation string
+	Order      string
+	Confidence string
+}
+
+func num(f float64) string { return strconv.FormatFloat(f, 'f', -1, 64) }
+
+func capitalize(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ToUpper(s[:1]) + s[1:]
+}
+
+func formatView(b jobs.BriefView, now time.Time) *briefView {
+	v := &briefView{
+		MaxTotal: "$" + num(b.Constraints.MaxTotalUSD),
+		MaxPos:   num(b.Constraints.MaxPositionPct) + "%",
+		StopLoss: num(b.Constraints.StopLossPct) + "%",
+		Thesis:   b.Thesis,
+		Risks:    b.Risks,
+	}
+	if left := b.ExpiresAt.Sub(now); left > 0 {
+		v.ExpiresIn = fmt.Sprintf("%d h %02d m", int(left.Hours()), int(left.Minutes())%60)
+	} else {
+		v.Expired = true
+	}
+	switch ts := b.Constraints.AllowedOrderTypes; len(ts) {
+	case 0:
+		v.OrderTypes = "No order types allowed"
+	case 1:
+		v.OrderTypes = capitalize(ts[0]) + " orders only"
+	default:
+		v.OrderTypes = capitalize(strings.Join(ts, " or ")) + " orders"
+	}
+	for _, p := range b.Positions {
+		row := positionRow{
+			Asset:      p.Asset,
+			Action:     capitalize(p.Action),
+			Trade:      p.Action != "hold",
+			Allocation: num(p.AllocationPct) + "%",
+			Order:      "—",
+			Confidence: capitalize(p.Confidence),
+		}
+		if p.OrderType != "" {
+			row.Order = capitalize(p.OrderType)
+			if p.Entry != "" && p.Entry != p.OrderType {
+				row.Order += ", " + strings.TrimPrefix(p.Entry, p.OrderType+" ")
+			}
+		}
+		v.Positions = append(v.Positions, row)
+	}
+	return v
 }
 
 func (s *Server) statusView(r *http.Request, rec jobs.Record) statusView {
 	v := statusView{
 		ID:        rec.JobID,
 		Theme:     rec.Theme,
+		RiskLevel: rec.RiskLevel,
+		RiskWord:  riskWord(rec.RiskLevel),
 		Status:    rec.Status,
 		Polling:   !rec.Status.Done(),
 		StepTotal: len(jobs.Stages),
@@ -197,6 +287,7 @@ func (s *Server) statusView(r *http.Request, rec jobs.Record) statusView {
 			v.Error = "The brief is ready but could not be loaded. Try again shortly."
 		} else {
 			v.Brief = string(body)
+			v.View = s.loadView(r, rec)
 		}
 	case jobs.StatusFailed:
 		v.Error = "This brief could not be generated."
@@ -205,6 +296,35 @@ func (s *Server) statusView(r *http.Request, rec jobs.Record) statusView {
 		}
 	}
 	return v
+}
+
+// loadView returns the formatted brief view, or nil to fall back to the raw Markdown.
+func (s *Server) loadView(r *http.Request, rec jobs.Record) *briefView {
+	raw, err := s.Briefs.GetBrief(r.Context(), jobs.ViewKey(rec.S3Key))
+	if err != nil {
+		if !errors.Is(err, jobs.ErrNotFound) {
+			s.Log.Warn("get_brief_view_failed", "job_id", rec.JobID, "err", err)
+		}
+		return nil
+	}
+	var b jobs.BriefView
+	if err := json.Unmarshal(raw, &b); err != nil || b.SchemaVersion != jobs.SchemaVersion {
+		s.Log.Warn("brief_view_unreadable", "job_id", rec.JobID, "err", err)
+		return nil
+	}
+	return formatView(b, s.Now())
+}
+
+// riskWord matches the slider's three bands in the UI.
+func riskWord(r int) string {
+	switch {
+	case r <= 33:
+		return "Cautious"
+	case r <= 66:
+		return "Balanced"
+	default:
+		return "Bold"
+	}
 }
 
 func (s *Server) render(w http.ResponseWriter, code int, name string, data any) {

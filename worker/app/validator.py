@@ -26,6 +26,13 @@ HARD_LIMITS = Constraints(
 )
 
 CITATION = re.compile(r"\[([A-Z]+\d+)\]")
+# Any citation-like marker, including ranges and lists such as [X1-X5] or [X1, X2].
+_MARKER = re.compile(r"[ \t]*\[[A-Z]+\d+(?:\s*[-\u2013,]\s*[A-Z]*\d+)*\]")
+
+
+def strip_citations(text: str) -> str:
+    """Remove citation markers. Sources stay internal (ADR-0001), so users never see them."""
+    return _MARKER.sub("", text).strip()
 
 
 @dataclass(frozen=True)

@@ -32,6 +32,7 @@ def main():
         default="Bitcoin and crypto liquidity breakout, 2-3 day swing, medium risk",
         help="User prompt/theme",
     )
+    parser.add_argument("--risk-level", type=int, default=50, help="0 (cautious) to 100 (bold)")
     parser.add_argument("--no-s3-upload", action="store_true", help="Print the brief without uploading it")
     parser.add_argument(
         "--with-dynamodb", action="store_true", help="Also write the job record, exactly as Lambda does"
@@ -41,7 +42,9 @@ def main():
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
     now = datetime.now(timezone.utc)
-    msg = JobMessage(schema_version=1, job_id=new_ulid(now), theme=args.theme, requested_at=now)
+    msg = JobMessage(
+        schema_version=1, job_id=new_ulid(now), theme=args.theme, risk_level=args.risk_level, requested_at=now
+    )
     print(f"Job {msg.job_id}\nTheme: {msg.theme}\n")
 
     pipeline = Pipeline(storage=S3DataStorage(), llm=LLMAgent())
@@ -53,16 +56,21 @@ def main():
         return
 
     try:
-        markdown, sources = pipeline.generate(msg, enter=lambda stage: print(f"-> {stage}"))
+        brief = pipeline.generate(msg, enter=lambda stage: print(f"-> {stage}"))
     except JobFailure as f:
         print(f"\n[FAILED] {f.error.stage} / {f.error.code}: {f.error.message}", file=sys.stderr)
         sys.exit(1)
 
-    print("\n" + "=" * 65 + f"\nVALIDATED BRIEF ({len(sources)} sources)\n" + "=" * 65)
-    print(markdown)
+    print(
+        "\n"
+        + "=" * 65
+        + f"\nVALIDATED BRIEF ({len(brief.evidence['sources'])} sources, internal)\n"
+        + "=" * 65
+    )
+    print(brief.markdown)
 
     if not args.no_s3_upload:
-        key = pipeline.save_brief(msg.job_id, msg.requested_at, markdown, sources)
+        key = pipeline.save_brief(msg.job_id, msg.requested_at, brief)
         print(f"\n[SAVED] s3://{pipeline.storage.bucket_name}/{key}")
 
 

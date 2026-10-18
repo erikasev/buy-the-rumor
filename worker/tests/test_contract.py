@@ -27,6 +27,12 @@ def test_message_missing_theme_is_rejected(fixture_text):
         JobMessage.model_validate_json(fixture_text("message.missing_theme.json"))
 
 
+def test_missing_risk_level_defaults_to_50(fixture_text):
+    data = json.loads(fixture_text("message.valid.json"))
+    del data["risk_level"]
+    assert JobMessage.model_validate(data).risk_level == 50
+
+
 def test_unknown_message_fields_are_ignored(fixture_text):
     data = json.loads(fixture_text("message.valid.json"))
     data["added_in_a_later_version"] = True
@@ -41,6 +47,8 @@ def test_unknown_message_fields_are_ignored(fixture_text):
         ("theme", "   "),
         ("theme", "x" * 1001),
         ("requested_at", "2026-10-21T13:00:00"),  # no timezone
+        ("risk_level", -1),
+        ("risk_level", 101),
     ],
 )
 def test_bad_message_values_are_rejected(fixture_text, field, value):

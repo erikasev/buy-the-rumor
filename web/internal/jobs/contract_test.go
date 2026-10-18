@@ -48,7 +48,7 @@ func TestUnknownMessageFieldsAreIgnored(t *testing.T) {
 
 // The message we send must use exactly the contract's field names.
 func TestOutgoingMessageMatchesFixtureFields(t *testing.T) {
-	rec := NewRecord("01JADQ7Y3K8V5C2N9W4R6T1M0P", "AI and compute", time.Date(2026, 10, 21, 13, 0, 0, 0, time.UTC))
+	rec := NewRecord("01JADQ7Y3K8V5C2N9W4R6T1M0P", "AI and compute", 40, time.Date(2026, 10, 21, 13, 0, 0, 0, time.UTC))
 	ours, _ := json.Marshal(MessageFor(rec))
 	if got, want := keys(t, ours), keys(t, readFixture(t, "message.valid.json")); got != want {
 		t.Errorf("fields = %s, want %s", got, want)
@@ -81,7 +81,7 @@ func TestRecordFixturesDecode(t *testing.T) {
 }
 
 func TestNewRecordMatchesQueuedFixture(t *testing.T) {
-	rec := NewRecord("01JADQ7Y3K8V5C2N9W4R6T1M0P", "AI and compute", time.Date(2026, 10, 21, 13, 0, 0, 0, time.UTC))
+	rec := NewRecord("01JADQ7Y3K8V5C2N9W4R6T1M0P", "AI and compute", 40, time.Date(2026, 10, 21, 13, 0, 0, 0, time.UTC))
 	ours, _ := json.Marshal(rec)
 	if got, want := keys(t, ours), keys(t, readFixture(t, "record.queued.json")); got != want {
 		t.Errorf("fields = %s, want %s", got, want)
@@ -90,6 +90,51 @@ func TestNewRecordMatchesQueuedFixture(t *testing.T) {
 	_ = json.Unmarshal(readFixture(t, "record.queued.json"), &fixture)
 	if rec.TTL != fixture.TTL {
 		t.Errorf("ttl = %d, want %d (created_at + 30 days)", rec.TTL, fixture.TTL)
+	}
+}
+
+func TestRiskLevelOutOfRangeIsRejected(t *testing.T) {
+	for _, bad := range []string{"-1", "101"} {
+		b := bytes.Replace(readFixture(t, "message.valid.json"), []byte(`"risk_level": 40`), []byte(`"risk_level": `+bad), 1)
+		if _, err := ParseMessage(b); err == nil {
+			t.Errorf("risk_level %s should be rejected", bad)
+		}
+	}
+}
+
+func TestBriefViewFixtureDecodes(t *testing.T) {
+	var v BriefView
+	if err := json.Unmarshal(readFixture(t, "brief_view.json"), &v); err != nil {
+		t.Fatal(err)
+	}
+	if v.SchemaVersion != 1 || len(v.Positions) != 2 || v.Constraints.MaxPositionPct != 25 || v.Thesis == "" {
+		t.Errorf("decoded view = %+v", v)
+	}
+	// What we write must use exactly the fixture's field names.
+	ours, _ := json.Marshal(v)
+	if got, want := keys(t, ours), keys(t, readFixture(t, "brief_view.json")); got != want {
+		t.Errorf("fields = %s, want %s", got, want)
+	}
+}
+
+func TestSampleViewFollowsRiskAndStaysWithinLimits(t *testing.T) {
+	gen := time.Date(2026, 10, 21, 13, 0, 0, 0, time.UTC)
+	for _, risk := range []int{0, 40, 100} {
+		v := SampleView(Message{JobID: "01JADQ7Y3K8V5C2N9W4R6T1M0P", Theme: "Biotech", RiskLevel: risk}, gen)
+		total := 0.0
+		for _, p := range v.Positions {
+			if p.AllocationPct > v.Constraints.MaxPositionPct {
+				t.Errorf("risk %d: %s %.0f%% exceeds %.0f%%", risk, p.Asset, p.AllocationPct, v.Constraints.MaxPositionPct)
+			}
+			total += p.AllocationPct
+		}
+		if total > 100 {
+			t.Errorf("risk %d: total %.0f%%", risk, total)
+		}
+		md := SampleMarkdown(v)
+		if !strings.Contains(md, `theme: "Biotech"`) || strings.Contains(md, "Sources") {
+			t.Errorf("risk %d: markdown does not match the view:\n%s", risk, md)
+		}
 	}
 }
 

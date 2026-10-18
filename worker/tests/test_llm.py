@@ -131,3 +131,9 @@ def test_api_error_becomes_llm_unavailable():
     with pytest.raises(JobFailure) as exc:
         agent(client).draft_strategy("AI", SOURCES, HARD_LIMITS, check=lambda d: [])
     assert exc.value.error.code == "LLM_UNAVAILABLE"
+
+
+def test_risk_level_is_in_the_strategist_prompt():
+    client = client_returning(json.dumps(DRAFT))
+    agent(client).draft_strategy("AI", SOURCES, HARD_LIMITS, check=lambda d: [], risk_level=15)
+    assert "Risk appetite: 15" in client.chat.completions.create.call_args.kwargs["messages"][1]["content"]

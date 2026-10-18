@@ -37,6 +37,7 @@ Sent by the web service, consumed by the worker. The message carries only what t
   "schema_version": 1,
   "job_id": "01JADQ7Y3K8V5C2N9W4R6T1M0P",
   "theme": "AI and compute",
+  "risk_level": 40,
   "requested_at": "2026-10-21T13:00:00Z"
 }
 ```
@@ -46,6 +47,7 @@ Sent by the web service, consumed by the worker. The message carries only what t
 | `schema_version` | integer | yes | Always `1` |
 | `job_id` | string | yes | Same ID as the DynamoDB record |
 | `theme` | string | yes | 1 to 1000 characters, trimmed by the web service |
+| `risk_level` | integer | no | 0 (cautious) to 100 (bold), from the risk slider. Readers default to 50 when absent. Added after v1 was first merged (additive). |
 | `requested_at` | string | yes | When the user submitted |
 
 ## DynamoDB record (table from `JOBS_TABLE_NAME`)
@@ -57,6 +59,7 @@ Partition key: `job_id`.
 | `job_id` | string | web | Partition key |
 | `schema_version` | number | web | `1` |
 | `theme` | string | web | Same as the message |
+| `risk_level` | number | web | Same as the message |
 | `status` | string | web (create), then worker | See state machine below |
 | `stage` | string | worker | One of the stage values below; absent while `QUEUED` |
 | `created_at` | string | web | |
@@ -118,9 +121,22 @@ The web service may show these to the user, mapped to friendly text it owns (e.g
 | Key | Content type | Written by |
 | --- | --- | --- |
 | `briefs/YYYY/MM/DD/<job_id>.md` | `text/markdown` | worker |
-| `briefs/YYYY/MM/DD/<job_id>.sources.json` | `application/json` | worker |
+| `briefs/YYYY/MM/DD/<job_id>.json` | `application/json` | worker (the brief view, below) |
+| `briefs/YYYY/MM/DD/<job_id>.sources.json` | `application/json` | worker; internal only, never served (ADR-0001) |
 
 The date parts come from `created_at`. The web service always reads the key from `s3_key` and never builds it itself.
+
+## Brief view (`<job_id>.json`)
+
+The structured form of the brief, which the web page renders. It has the brief's frontmatter fields (`schema_version`, `brief_id`, `theme`, `generated_at`, `expires_at`, `constraints`, `positions`) plus:
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `risk_level` | integer | 0 to 100, as requested |
+| `thesis` | string | Plain text, may contain line breaks |
+| `risks` | string | Plain text: what could go wrong and what would change the plan |
+
+It never contains sources or citation markers (ADR-0001). The worker writes it after the brief passes validation, from the same data as the `.md`. If it is missing or unreadable, the web page falls back to showing the raw `.md`. Example: `contracts/fixtures/brief_view.json`.
 
 ## Fixtures and contract tests
 
@@ -128,5 +144,6 @@ Example files live in `contracts/fixtures/`:
 
 - `message.valid.json`, `message.missing_theme.json`
 - `record.queued.json`, `record.succeeded.json`, `record.failed.json`
+- `brief_view.json`
 
 The Go tests and the Python tests both load these files. Valid fixtures must parse; invalid ones must be rejected. If either side's types drift from this document, CI fails.

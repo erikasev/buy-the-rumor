@@ -179,6 +179,7 @@ class LLMAgent:
         sources: list[dict[str, Any]],
         limits: Constraints,
         check: Callable[[StrategyDraft], list[str]],
+        risk_level: int = 50,
     ) -> StrategyDraft:
         """Ask the strong model for positions and a cited thesis.
 
@@ -202,7 +203,9 @@ class LLMAgent:
         user = (
             f"<user_request>\n{json.dumps(theme)}\n</user_request>\n"
             "Honor the user's stated preferences (sectors, risk, trading frequency) when they fit the "
-            "hard limits below; the hard limits always win.\n\n"
+            "hard limits below; the hard limits always win.\n"
+            f"Risk appetite: {risk_level} on a 0 (cautious) to 100 (bold) scale. Lower means fewer, "
+            "smaller positions and more holds; it never permits exceeding the hard limits.\n\n"
             f"<sources>\n{json.dumps(source_items, ensure_ascii=False, indent=1)}\n</sources>\n\n"
             "Hard limits:\n"
             f"- Buy allocations sum to at most 100%; each position at most {limits.max_position_pct:g}%.\n"
@@ -210,7 +213,8 @@ class LLMAgent:
             "Every buy or sell needs order_type.\n"
             "- A hold has allocation_pct 0; a buy or sell has allocation_pct above 0.\n"
             "- Each asset appears once and matches ^[A-Z0-9][A-Z0-9-]{0,19}-USD$.\n"
-            "- Back every claim in thesis and risks with source ids, each in its own brackets, e.g. "
+            "- Back every claim in thesis and risks with source ids (checked internally, never shown "
+            "to users), each in its own brackets, e.g. "
             "[X3][X7]. Ranges like [X1-X5] don't count. Cite only ids above.\n"
             "- If the sources don't support a trade, return holds with low confidence.\n\n"
             "Respond with only this JSON object:\n"

@@ -1,23 +1,73 @@
-<div class="card" id="job-{{.ID}}"
+<div id="job" class="job" data-status="{{.Status}}" data-step="{{.StepNum}}" data-total="{{.StepTotal}}" data-stage-label="{{.StageLabel}}" data-theme="{{.Theme}}" data-risk="{{.RiskLevel}}" data-risk-word="{{.RiskWord}}"
   {{- if .Polling}} hx-get="/briefs/{{.ID}}" hx-trigger="every 2s" hx-swap="outerHTML"{{end}}>
-  <p class="meta">Theme: <strong>{{.Theme}}</strong></p>
-
   {{if eq .Status "QUEUED"}}
-    <p class="state">Queued. Waiting for an agent…</p>
+    <p class="job-text">Queued. Waiting for an agent.</p>
   {{else if eq .Status "RUNNING"}}
-    <p class="state">{{if .StageLabel}}{{.StageLabel}}{{else}}Starting{{end}}…</p>
-    <progress max="{{.StepTotal}}" value="{{.StepNum}}">{{.StepNum}} of {{.StepTotal}}</progress>
+    <p class="job-text">{{if .StageLabel}}{{.StageLabel}}{{else}}Starting{{end}}, stage {{.StepNum}} of {{.StepTotal}}.</p>
   {{else if eq .Status "SUCCEEDED"}}
     {{if .Error}}
-      <p class="state error">{{.Error}}</p>
+      <p class="job-error">{{.Error}}</p>
     {{else}}
-      <div class="actions">
-        <p class="state ok">Brief ready</p>
-        <a class="button" href="/briefs/{{.ID}}.md" download>Download .md</a>
-      </div>
-      <pre class="brief">{{.Brief}}</pre>
+      <p class="job-text">Strategy ready.</p>
+      <template id="brief-tpl">
+        <article class="brief-card">
+          <div class="brief-head">
+            <div>
+              <span class="eyebrow">Strategy ready</span>
+              <h2>{{.Theme}}</h2>
+            </div>
+            <div class="brief-actions">
+              <button type="button" class="ghost-btn" data-copy>Copy for Coinbase agent</button>
+              <a class="solid-btn" href="/briefs/{{.ID}}.md" download>Download .md</a>
+            </div>
+          </div>
+          {{if .View}}
+          <div class="pills">
+            {{if .View.Expired}}<span class="pill pill-warn">Expired, grow a fresh one</span>{{else}}<span class="pill">Fresh for {{.View.ExpiresIn}}</span>{{end}}
+            <span class="pill">Risk {{.RiskLevel}} · {{.RiskWord}}</span>
+            <span class="pill">{{.View.MaxPos}} max per position</span>
+            <span class="pill">{{.View.StopLoss}} stop-loss</span>
+            <span class="pill">{{.View.OrderTypes}}</span>
+            <span class="pill">Max {{.View.MaxTotal}} total</span>
+          </div>
+          <section class="brief-section">
+            <h3>Positions</h3>
+            <div class="tbl-wrap">
+              <table class="tbl">
+                <thead><tr><th scope="col">Asset</th><th scope="col">Action</th><th scope="col">Allocation</th><th scope="col">Order</th><th scope="col">Confidence</th></tr></thead>
+                <tbody>
+                  {{range .View.Positions}}
+                  <tr><td class="mono">{{.Asset}}</td><td>{{if .Trade}}<strong>{{.Action}}</strong>{{else}}{{.Action}}{{end}}</td><td class="mono">{{.Allocation}}</td><td>{{.Order}}</td><td>{{.Confidence}}</td></tr>
+                  {{end}}
+                </tbody>
+              </table>
+            </div>
+          </section>
+          <section class="brief-section brief-text">
+            <h3>Thesis</h3>
+            <p>{{.View.Thesis}}</p>
+            <h3>What would change the plan</h3>
+            <p>{{.View.Risks}}</p>
+          </section>
+          <details class="raw">
+            <summary>View raw .md</summary>
+            <pre class="brief-md" data-brief>{{.Brief}}</pre>
+          </details>
+          {{else}}
+          <div class="pills">
+            <span class="pill">Risk {{.RiskLevel}} · {{.RiskWord}}</span>
+            <span class="pill">Validated against hard limits</span>
+          </div>
+          <pre class="brief-md" data-brief>{{.Brief}}</pre>
+          {{end}}
+        </article>
+        <div class="brief-foot">
+          <a class="ghost-btn" href="/">Grow another strategy</a>
+          <p class="disclaimer">Research and decision support, not investment advice. You decide whether any agent runs a strategy.</p>
+        </div>
+      </template>
     {{end}}
   {{else if eq .Status "FAILED"}}
-    <p class="state error">{{.Error}}</p>
+    <p class="job-error">{{.Error}}</p>
   {{end}}
 </div>

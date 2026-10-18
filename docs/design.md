@@ -98,7 +98,7 @@ The brief is one Markdown file with two parts: YAML frontmatter that code can ch
 - **Frontmatter** holds what must never be ambiguous: assets, actions, sizes, order types, stop-losses, and an expiry time.
 - **Body** holds the thesis, the cited evidence, the risks, and what would change the plan.
 - **Expiry** is required. An agent must refuse a brief past `expires_at`, so stale sentiment never trades.
-- **Every claim cites a source** by ID, listed at the end with its URL and fetch time.
+- **Every claim is tied to a source internally.** The agents and the reviewer work with source IDs, and the evidence is kept privately in `<job_id>.sources.json`. The brief users receive carries no sources or citation markers ([ADR-0001](adr/0001-data-sources-stay-internal.md)).
 
 Example (asset names are placeholders):
 
@@ -131,13 +131,10 @@ Follow only the frontmatter. Do not trade after expires_at.
 Use limit orders only. Exit any position down 8% from entry.
 
 ## Thesis
-Sentiment on ASSET-A turned positive across three sources [S1][S3]...
+Sentiment on ASSET-A turned positive across several independent signals...
 
 ## Risks and what would change the plan
 ...
-
-## Sources
-- [S1] <url>, fetched 2026-10-21T12:41Z
 ```
 
 The schema is versioned (`schema_version`). Any breaking change to it needs its own short ADR.
@@ -202,7 +199,7 @@ Job state lives in one DynamoDB table; the briefs themselves live in S3. Lookups
 
 A global secondary index on `theme` + `created_at` finds the previous brief for a theme. That powers the stretch "what changed since last time" diff.
 
-**S3 bucket** stores `briefs/YYYY/MM/DD/<job_id>.md` and, beside it, `<job_id>.sources.json` with the raw fetched evidence. The bucket blocks all public access; the web service reads it with its own IAM role.
+**S3 bucket** stores `briefs/YYYY/MM/DD/<job_id>.md`, the structured `<job_id>.json` the page renders, and `<job_id>.sources.json` with the raw fetched evidence, which is internal only. The bucket blocks all public access; the web service reads it with its own IAM role.
 
 ## Infrastructure and deployment
 

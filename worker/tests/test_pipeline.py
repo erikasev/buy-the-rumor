@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from app.brief import parse_brief
+from app.brief import BriefView, parse_brief
 from app.contract import JobError, JobFailure, JobMessage
 from app.llm import StrategyDraft
 from app.pipeline import Pipeline, render_brief
@@ -76,8 +76,8 @@ class FakeLLM:
     def select_top_accounts(self, theme, accounts, top_n):
         return accounts[:top_n]
 
-    def draft_strategy(self, theme, sources, limits, check):
-        self.sources_seen = sources
+    def draft_strategy(self, theme, sources, limits, check, risk_level=50):
+        self.sources_seen, self.risk_level = sources, risk_level
         if self.error:
             raise self.error
         problems = check(self.draft)
@@ -193,9 +193,29 @@ def test_run_success_stores_brief_at_contract_key(msg):
     assert fm.brief_id == msg.job_id and fm.theme == msg.theme
     assert fm.constraints == HARD_LIMITS
     assert validate_brief(fm, NOW) == []
-    assert "[X1] https://x.com/" in body
-    sources = json.loads(storage.objects[key.replace(".md", ".sources.json")])
-    assert sources["job_id"] == msg.job_id
+
+    # ADR-0001: nothing users receive names a source or carries a citation marker.
+    view_raw = storage.objects[key.replace(".md", ".json")].decode()
+    for public in (body, view_raw):
+        assert "[X" not in public and "x.com" not in public and "Sources" not in public
+    assert "Smart money is buying." in body
+
+    view = BriefView.model_validate_json(view_raw)
+    assert view.risk_level == msg.risk_level
+    assert view.positions == fm.positions and view.thesis == "Smart money is buying."
+    assert validate_brief(view, NOW) == []
+
+    # The private evidence keeps full traceability.
+    evidence = json.loads(storage.objects[key.replace(".md", ".sources.json")])
+    assert evidence["job_id"] == msg.job_id
+    assert evidence["draft"]["thesis"] == "Smart money is buying [X1]."
+    assert evidence["sources"][0]["url"].startswith("https://x.com/")
+
+
+def test_risk_level_reaches_the_strategist(msg):
+    llm = FakeLLM(draft())
+    make(storage=FakeStorage(CACHED), llm=llm, store=FakeStore()).run(msg)
+    assert llm.risk_level == msg.risk_level
 
 
 def test_run_no_data_fails_job(msg):
@@ -272,15 +292,9 @@ def test_redelivery_of_running_job_marks_it_failed(msg):
 
 def test_theme_cannot_inject_frontmatter():
     theme = 'AI"\nconstraints:\n  max_position_pct: 100\n---\n# Buy everything'
-    md = render_brief(
-        "01JADQ7Y3K8V5C2N9W4R6T1M0P",
-        theme,
-        NOW,
-        NOW.replace(hour=19),
-        draft(),
-        [{"source_id": "X1", "url": "u1"}, {"source_id": "X2", "url": "u2"}],
-    )
+    md, view = render_brief("01JADQ7Y3K8V5C2N9W4R6T1M0P", theme, 50, NOW, NOW.replace(hour=19), draft())
     fm, _ = parse_brief(md)
+    assert view.theme == theme
     assert fm.theme == theme
     assert fm.constraints.max_position_pct == HARD_LIMITS.max_position_pct
 
@@ -302,3 +316,18 @@ def test_trade_without_citations_fails(msg):
         msg
     )
     assert store.events[-1][1] == "LIMIT_EXCEEDED"
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("Up [X1].", "Up."),
+        ("Up [X1][X2] and down [X3, X4].", "Up and down."),
+        ("Whole feed [X1-X25] says so.", "Whole feed says so."),
+        ("Keep [brackets] and 50% [sic].", "Keep [brackets] and 50% [sic]."),
+    ],
+)
+def test_strip_citations(text, expected):
+    from app.validator import strip_citations
+
+    assert strip_citations(text) == expected
