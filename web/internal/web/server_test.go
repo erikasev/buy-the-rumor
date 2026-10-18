@@ -252,6 +252,79 @@ func TestFailedJobShowsErrorMessage(t *testing.T) {
 	}
 }
 
+func TestSucceededBriefRendersStructuredView(t *testing.T) {
+	mem := jobs.NewMemory()
+	s := &Server{
+		Store: mem, Briefs: mem, Queue: &jobs.FakeWorker{Mem: mem},
+		Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	res, err := http.PostForm(ts.URL+"/briefs", url.Values{"theme": {"Biotech"}, "risk_level": {"100"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := io.ReadAll(res.Body)
+	res.Body.Close()
+	id := between(string(b), `hx-get="/briefs/`, `"`)
+
+	var page string
+	for range 50 {
+		_, page = get(t, ts.URL+"/briefs/"+id)
+		if strings.Contains(page, "brief-tpl") {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	for _, want := range []string{"<table", "ASSET-A-USD", "Fresh for ", "40% max per position", "12% stop-loss", "Limit orders only", "Risk 100 · Bold", "View raw .md", "Biotech"} {
+		if !strings.Contains(page, want) {
+			t.Errorf("page is missing %q", want)
+		}
+	}
+	if strings.Contains(page, "Sources") {
+		t.Error("page must not show sources")
+	}
+	_, md := get(t, ts.URL+"/briefs/"+id+".md")
+	if !strings.Contains(md, `theme: "Biotech"`) {
+		t.Errorf("downloaded brief should carry the chosen sector:\n%s", md)
+	}
+}
+
+func TestMissingViewFallsBackToRawMarkdown(t *testing.T) {
+	mem := jobs.NewMemory()
+	// Simulate a worker that wrote only the .md: run the fake worker, then drop the view.
+	s := &Server{
+		Store: mem, Briefs: dropViews{mem}, Queue: &jobs.FakeWorker{Mem: mem},
+		Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+	_, body := postTheme(t, ts.URL, "Crypto")
+	id := between(body, `hx-get="/briefs/`, `"`)
+	var page string
+	for range 50 {
+		_, page = get(t, ts.URL+"/briefs/"+id)
+		if strings.Contains(page, "brief-tpl") {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if strings.Contains(page, "<table") || !strings.Contains(page, "Validated against hard limits") || !strings.Contains(page, "data-brief") {
+		t.Errorf("expected the raw fallback view:\n%s", page)
+	}
+}
+
+// dropViews hides every brief view (.json), as if the worker never wrote one.
+type dropViews struct{ m *jobs.Memory }
+
+func (d dropViews) GetBrief(ctx context.Context, key string) ([]byte, error) {
+	if strings.HasSuffix(key, ".json") {
+		return nil, jobs.ErrNotFound
+	}
+	return d.m.GetBrief(ctx, key)
+}
+
 func between(s, start, end string) string {
 	i := strings.Index(s, start)
 	if i < 0 {

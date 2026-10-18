@@ -21,11 +21,45 @@
               <a class="solid-btn" href="/briefs/{{.ID}}.md" download>Download .md</a>
             </div>
           </div>
+          {{if .View}}
+          <div class="pills">
+            {{if .View.Expired}}<span class="pill pill-warn">Expired, grow a fresh one</span>{{else}}<span class="pill">Fresh for {{.View.ExpiresIn}}</span>{{end}}
+            <span class="pill">Risk {{.RiskLevel}} · {{.RiskWord}}</span>
+            <span class="pill">{{.View.MaxPos}} max per position</span>
+            <span class="pill">{{.View.StopLoss}} stop-loss</span>
+            <span class="pill">{{.View.OrderTypes}}</span>
+            <span class="pill">Max {{.View.MaxTotal}} total</span>
+          </div>
+          <section class="brief-section">
+            <h3>Positions</h3>
+            <div class="tbl-wrap">
+              <table class="tbl">
+                <thead><tr><th scope="col">Asset</th><th scope="col">Action</th><th scope="col">Allocation</th><th scope="col">Order</th><th scope="col">Confidence</th></tr></thead>
+                <tbody>
+                  {{range .View.Positions}}
+                  <tr><td class="mono">{{.Asset}}</td><td>{{if .Trade}}<strong>{{.Action}}</strong>{{else}}{{.Action}}{{end}}</td><td class="mono">{{.Allocation}}</td><td>{{.Order}}</td><td>{{.Confidence}}</td></tr>
+                  {{end}}
+                </tbody>
+              </table>
+            </div>
+          </section>
+          <section class="brief-section brief-text">
+            <h3>Thesis</h3>
+            <p>{{.View.Thesis}}</p>
+            <h3>What would change the plan</h3>
+            <p>{{.View.Risks}}</p>
+          </section>
+          <details class="raw">
+            <summary>View raw .md</summary>
+            <pre class="brief-md" data-brief>{{.Brief}}</pre>
+          </details>
+          {{else}}
           <div class="pills">
             <span class="pill">Risk {{.RiskLevel}} · {{.RiskWord}}</span>
             <span class="pill">Validated against hard limits</span>
           </div>
           <pre class="brief-md" data-brief>{{.Brief}}</pre>
+          {{end}}
         </article>
         <div class="brief-foot">
           <a class="ghost-btn" href="/">Grow another strategy</a>

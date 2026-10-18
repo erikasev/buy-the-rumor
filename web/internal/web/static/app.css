@@ -170,6 +170,20 @@ a { color: var(--matcha-deep); }
   margin: 0; padding: 20px; max-height: 60vh; overflow: auto; white-space: pre-wrap;
   font: 13px/1.6 var(--mono); background: var(--paper); border: 1px solid var(--rule-soft); border-radius: 14px;
 }
+.pill-warn { border-color: #E3B4A4; background: #F6E3DC; color: #7A3320; }
+.brief-section { display: flex; flex-direction: column; gap: 10px; }
+.brief-section h3 { margin: 0; font-size: 17px; }
+.brief-text { max-width: 720px; }
+.brief-text h3 + p { margin: 0 0 12px; }
+.brief-text p { margin: 0; font-size: 15px; line-height: 1.6; color: #3B4532; white-space: pre-line; }
+.tbl-wrap { overflow-x: auto; border: 1px solid var(--rule-soft); border-radius: 14px; background: var(--paper); }
+.tbl { width: 100%; border-collapse: collapse; font-size: 14px; }
+.tbl th { text-align: left; font-weight: 600; font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); padding: 10px 12px; border-bottom: 1px solid var(--rule); white-space: nowrap; }
+.tbl td { padding: 12px; border-bottom: 1px solid var(--rule-soft); }
+.tbl tr:last-child td { border-bottom: 0; }
+.raw summary { cursor: pointer; font-weight: 600; font-size: 14px; color: var(--muted); padding: 4px 0; }
+.raw summary:hover { color: var(--ink); }
+.raw[open] summary { margin-bottom: 10px; }
 .ghost-btn {
   border: 1px solid #CFC5A6; border-radius: 12px; background: transparent; color: var(--ink);
   font: 600 15px var(--sans); padding: 0 18px; min-height: 44px; cursor: pointer;
