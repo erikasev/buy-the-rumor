@@ -48,7 +48,7 @@ func TestUnknownMessageFieldsAreIgnored(t *testing.T) {
 
 // The message we send must use exactly the contract's field names.
 func TestOutgoingMessageMatchesFixtureFields(t *testing.T) {
-	rec := NewRecord("01JADQ7Y3K8V5C2N9W4R6T1M0P", "AI and compute", time.Date(2026, 10, 21, 13, 0, 0, 0, time.UTC))
+	rec := NewRecord("01JADQ7Y3K8V5C2N9W4R6T1M0P", "AI and compute", 40, time.Date(2026, 10, 21, 13, 0, 0, 0, time.UTC))
 	ours, _ := json.Marshal(MessageFor(rec))
 	if got, want := keys(t, ours), keys(t, readFixture(t, "message.valid.json")); got != want {
 		t.Errorf("fields = %s, want %s", got, want)
@@ -81,7 +81,7 @@ func TestRecordFixturesDecode(t *testing.T) {
 }
 
 func TestNewRecordMatchesQueuedFixture(t *testing.T) {
-	rec := NewRecord("01JADQ7Y3K8V5C2N9W4R6T1M0P", "AI and compute", time.Date(2026, 10, 21, 13, 0, 0, 0, time.UTC))
+	rec := NewRecord("01JADQ7Y3K8V5C2N9W4R6T1M0P", "AI and compute", 40, time.Date(2026, 10, 21, 13, 0, 0, 0, time.UTC))
 	ours, _ := json.Marshal(rec)
 	if got, want := keys(t, ours), keys(t, readFixture(t, "record.queued.json")); got != want {
 		t.Errorf("fields = %s, want %s", got, want)
@@ -90,6 +90,15 @@ func TestNewRecordMatchesQueuedFixture(t *testing.T) {
 	_ = json.Unmarshal(readFixture(t, "record.queued.json"), &fixture)
 	if rec.TTL != fixture.TTL {
 		t.Errorf("ttl = %d, want %d (created_at + 30 days)", rec.TTL, fixture.TTL)
+	}
+}
+
+func TestRiskLevelOutOfRangeIsRejected(t *testing.T) {
+	for _, bad := range []string{"-1", "101"} {
+		b := bytes.Replace(readFixture(t, "message.valid.json"), []byte(`"risk_level": 40`), []byte(`"risk_level": `+bad), 1)
+		if _, err := ParseMessage(b); err == nil {
+			t.Errorf("risk_level %s should be rejected", bad)
+		}
 	}
 }
 

@@ -36,6 +36,7 @@ Sent by the web service, consumed by the worker. The message carries only what t
   "schema_version": 1,
   "job_id": "01JADQ7Y3K8V5C2N9W4R6T1M0P",
   "theme": "AI and compute",
+  "risk_level": 40,
   "requested_at": "2026-10-21T13:00:00Z"
 }
 ```
@@ -45,6 +46,7 @@ Sent by the web service, consumed by the worker. The message carries only what t
 | `schema_version` | integer | yes | Always `1` |
 | `job_id` | string | yes | Same ID as the DynamoDB record |
 | `theme` | string | yes | 1 to 100 characters, trimmed by the web service |
+| `risk_level` | integer | no | 0 (cautious) to 100 (bold), from the risk slider. Readers default to 50 when absent. Added after v1 was first merged (additive). |
 | `requested_at` | string | yes | When the user submitted |
 
 ## DynamoDB record (table from `JOBS_TABLE_NAME`)
@@ -56,6 +58,7 @@ Partition key: `job_id`.
 | `job_id` | string | web | Partition key |
 | `schema_version` | number | web | `1` |
 | `theme` | string | web | Same as the message |
+| `risk_level` | number | web | Same as the message |
 | `status` | string | web (create), then worker | See state machine below |
 | `stage` | string | worker | One of the stage values below; absent while `QUEUED` |
 | `created_at` | string | web | |

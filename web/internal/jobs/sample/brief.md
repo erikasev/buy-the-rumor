@@ -27,12 +27,7 @@ Follow only the frontmatter. Do not trade after expires_at.
 Use limit orders only. Exit any position down 8% from entry.
 
 ## Thesis
-Sentiment on ASSET-A turned positive across three sources [S1][S3].
+Sample brief for local development. In production, the strategist agent writes the thesis here.
 
 ## Risks and what would change the plan
-A reversal in [S2] would invalidate the thesis.
-
-## Sources
-- [S1] https://example.com/a, fetched 2026-10-21T12:41Z
-- [S2] https://example.com/b, fetched 2026-10-21T12:42Z
-- [S3] https://example.com/c, fetched 2026-10-21T12:43Z
+Sample text. In production, the risk reviewer agent writes this section.

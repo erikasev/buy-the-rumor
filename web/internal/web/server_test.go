@@ -106,6 +106,63 @@ func TestCreateBriefWritesRecordThenSendsMessage(t *testing.T) {
 	}
 }
 
+func TestCreateBriefStoresRiskLevel(t *testing.T) {
+	ts, mem, q := newTestServer(t)
+	res, err := http.PostForm(ts.URL+"/briefs", url.Values{"theme": {"Crypto"}, "risk_level": {"72"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	rec, _ := mem.Get(context.Background(), fixedID)
+	if rec.RiskLevel != 72 || q.sent[0].RiskLevel != 72 {
+		t.Errorf("record risk = %d, message risk = %d, want 72", rec.RiskLevel, q.sent[0].RiskLevel)
+	}
+}
+
+func TestCreateBriefDefaultsRiskLevel(t *testing.T) {
+	ts, mem, _ := newTestServer(t)
+	postTheme(t, ts.URL, "Crypto")
+	rec, _ := mem.Get(context.Background(), fixedID)
+	if rec.RiskLevel != jobs.DefaultRiskLevel {
+		t.Errorf("risk = %d, want %d", rec.RiskLevel, jobs.DefaultRiskLevel)
+	}
+}
+
+func TestCreateBriefRejectsBadRiskLevel(t *testing.T) {
+	ts, _, q := newTestServer(t)
+	for _, risk := range []string{"-1", "101", "lots"} {
+		res, err := http.PostForm(ts.URL+"/briefs", url.Values{"theme": {"Crypto"}, "risk_level": {risk}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		res.Body.Close()
+		if res.StatusCode != http.StatusBadRequest {
+			t.Errorf("risk %q: status = %d", risk, res.StatusCode)
+		}
+	}
+	if len(q.sent) != 0 {
+		t.Error("no message should be sent for a bad risk level")
+	}
+}
+
+func TestStaticAssetsAreServed(t *testing.T) {
+	ts, _, _ := newTestServer(t)
+	for _, path := range []string{"/static/app.css", "/static/stage.js", "/static/fonts/instrument-sans-latin-wght-normal.woff2"} {
+		if res, _ := get(t, ts.URL+path); res.StatusCode != http.StatusOK {
+			t.Errorf("%s: status = %d", path, res.StatusCode)
+		}
+	}
+}
+
+func TestPagesHaveNoInlineStylesOrScripts(t *testing.T) {
+	// The CSP forbids them; this catches regressions before a browser does.
+	ts, _, _ := newTestServer(t)
+	_, page := get(t, ts.URL+"/")
+	if strings.Contains(page, "style=") || strings.Contains(page, "<script>") {
+		t.Error("index page contains an inline style or script")
+	}
+}
+
 func TestCreateBriefRejectsBadTheme(t *testing.T) {
 	ts, _, q := newTestServer(t)
 	for _, theme := range []string{"", "   ", strings.Repeat("x", 101)} {
@@ -153,12 +210,12 @@ func TestFakeWorkerFlowEndsWithDownloadableBrief(t *testing.T) {
 	var page string
 	for range 50 {
 		_, page = get(t, ts.URL+"/briefs/"+id)
-		if strings.Contains(page, "Brief ready") {
+		if strings.Contains(page, "Strategy ready") {
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if !strings.Contains(page, "Brief ready") || strings.Contains(page, "hx-trigger") {
+	if !strings.Contains(page, "Strategy ready") || strings.Contains(page, "hx-trigger") {
 		t.Fatalf("brief never finished, or still polling: %s", page)
 	}
 

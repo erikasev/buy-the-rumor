@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -103,13 +104,23 @@ func (s *Server) createBrief(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	risk := jobs.DefaultRiskLevel
+	if raw := r.PostFormValue("risk_level"); raw != "" {
+		v, err := strconv.Atoi(raw)
+		if err != nil || !jobs.ValidRisk(v) {
+			s.renderError(w, http.StatusBadRequest, "Risk level must be between 0 and 100.")
+			return
+		}
+		risk = v
+	}
+
 	now := s.Now()
 	id, err := s.NewID(now)
 	if err != nil {
 		s.fail(w, "new job id", err)
 		return
 	}
-	rec := jobs.NewRecord(id, theme, now)
+	rec := jobs.NewRecord(id, theme, risk, now)
 
 	// Write the record before sending the message, so the worker never sees a
 	// job that doesn't exist yet. If the send fails, the orphaned QUEUED record
@@ -166,6 +177,8 @@ func (s *Server) getBrief(w http.ResponseWriter, r *http.Request) {
 type statusView struct {
 	ID         string
 	Theme      string
+	RiskLevel  int
+	RiskWord   string
 	Status     jobs.Status
 	Polling    bool
 	StageLabel string
@@ -179,6 +192,8 @@ func (s *Server) statusView(r *http.Request, rec jobs.Record) statusView {
 	v := statusView{
 		ID:        rec.JobID,
 		Theme:     rec.Theme,
+		RiskLevel: rec.RiskLevel,
+		RiskWord:  riskWord(rec.RiskLevel),
 		Status:    rec.Status,
 		Polling:   !rec.Status.Done(),
 		StepTotal: len(jobs.Stages),
@@ -205,6 +220,18 @@ func (s *Server) statusView(r *http.Request, rec jobs.Record) statusView {
 		}
 	}
 	return v
+}
+
+// riskWord matches the slider's three bands in the UI.
+func riskWord(r int) string {
+	switch {
+	case r <= 33:
+		return "Cautious"
+	case r <= 66:
+		return "Balanced"
+	default:
+		return "Bold"
+	}
 }
 
 func (s *Server) render(w http.ResponseWriter, code int, name string, data any) {

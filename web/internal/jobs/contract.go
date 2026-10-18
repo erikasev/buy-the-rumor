@@ -21,6 +21,9 @@ const TTL = 30 * 24 * time.Hour
 
 const MaxThemeLen = 100
 
+// DefaultRiskLevel is used when a reader receives no risk_level (contract v1, additive field).
+const DefaultRiskLevel = 50
+
 type Status string
 
 const (
@@ -71,6 +74,7 @@ type Message struct {
 	SchemaVersion int       `json:"schema_version"`
 	JobID         string    `json:"job_id"`
 	Theme         string    `json:"theme"`
+	RiskLevel     int       `json:"risk_level"`
 	RequestedAt   time.Time `json:"requested_at"`
 }
 
@@ -86,6 +90,7 @@ type Record struct {
 	JobID         string    `json:"job_id"`
 	SchemaVersion int       `json:"schema_version"`
 	Theme         string    `json:"theme"`
+	RiskLevel     int       `json:"risk_level"`
 	Status        Status    `json:"status"`
 	Stage         Stage     `json:"stage,omitempty"`
 	CreatedAt     time.Time `json:"created_at"`
@@ -95,7 +100,13 @@ type Record struct {
 	TTL           int64     `json:"ttl"`
 }
 
-var ErrInvalidTheme = errors.New("theme must be 1 to 100 characters")
+var (
+	ErrInvalidTheme = errors.New("theme must be 1 to 100 characters")
+	ErrInvalidRisk  = errors.New("risk_level must be 0 to 100")
+)
+
+// ValidRisk reports whether a risk level is within the contract's range.
+func ValidRisk(r int) bool { return r >= 0 && r <= 100 }
 
 // CleanTheme trims a user-entered theme and checks its length.
 func CleanTheme(raw string) (string, error) {
@@ -107,12 +118,13 @@ func CleanTheme(raw string) (string, error) {
 }
 
 // NewRecord builds the QUEUED record the web service writes for a new job.
-func NewRecord(jobID, theme string, now time.Time) Record {
+func NewRecord(jobID, theme string, risk int, now time.Time) Record {
 	now = now.UTC().Truncate(time.Second)
 	return Record{
 		JobID:         jobID,
 		SchemaVersion: SchemaVersion,
 		Theme:         theme,
+		RiskLevel:     risk,
 		Status:        StatusQueued,
 		CreatedAt:     now,
 		UpdatedAt:     now,
@@ -126,6 +138,7 @@ func MessageFor(r Record) Message {
 		SchemaVersion: SchemaVersion,
 		JobID:         r.JobID,
 		Theme:         r.Theme,
+		RiskLevel:     r.RiskLevel,
 		RequestedAt:   r.CreatedAt,
 	}
 }
@@ -144,6 +157,8 @@ func (m Message) Validate() error {
 		return errors.New("job_id is not a ULID")
 	case m.RequestedAt.IsZero():
 		return errors.New("requested_at is required")
+	case !ValidRisk(m.RiskLevel):
+		return ErrInvalidRisk
 	}
 	if _, err := CleanTheme(m.Theme); err != nil {
 		return err
