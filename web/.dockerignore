@@ -1,0 +1,4 @@
+*_test.go
+.DS_Store
+Dockerfile
+.dockerignore
