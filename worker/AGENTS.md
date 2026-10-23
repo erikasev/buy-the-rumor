@@ -76,5 +76,6 @@ Config: endpoints, model IDs and pipeline knobs live in `settings.yaml` at the r
 - Handler: `app.handler.lambda_handler`.
 - The SQS trigger must enable `ReportBatchItemFailures`; the handler returns partial batch responses.
 - Environment variables are the ones listed in the job contract, including the two secrets.
-- Lambda timeout 5 minutes; SQS visibility timeout longer than that (e.g. 6 minutes); dead-letter queue after 3 receives.
+- Lambda timeout 5 minutes; SQS visibility timeout 30 minutes (AWS recommends 6x the function timeout for SQS triggers); dead-letter queue `erika-sqs-dlq` after 3 receives (14-day retention).
+- SQS trigger: batch size 1, `ReportBatchItemFailures` on, maximum concurrency 2-5 (caps spend and LLM rate limits). Lambda role: `AWSLambdaSQSQueueExecutionRole` on the queue.
 - IAM: `dynamodb:GetItem`/`UpdateItem` on the table; `s3:ListBucket` on the bucket, `s3:GetObject` on `collected-data/*` and `config/sources.json`, `s3:PutObject` on `collected-data/*` and `briefs/*`.
