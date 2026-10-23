@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from app.brief import BriefView, parse_brief
+from app.brief import BriefView, UserRules, parse_brief
 from app.contract import JobError, JobFailure, JobMessage
 from app.llm import StrategyDraft
 from app.pipeline import Pipeline, render_brief
@@ -69,17 +69,18 @@ class FakeCollector:
 
 
 class FakeLLM:
-    def __init__(self, draft: StrategyDraft | None = None, error: JobFailure | None = None):
-        self.draft, self.error = draft, error
+    def __init__(self, draft: StrategyDraft | None = None, rules: UserRules | None = None):
+        self.draft, self.rules = draft, rules or UserRules()
         self.sources_seen: list[dict] = []
+
+    def extract_rules(self, theme):
+        return self.rules
 
     def select_top_accounts(self, theme, accounts, top_n):
         return accounts[:top_n]
 
-    def draft_strategy(self, theme, sources, limits, check, risk_level=50):
-        self.sources_seen, self.risk_level = sources, risk_level
-        if self.error:
-            raise self.error
+    def draft_strategy(self, theme, sources, limits, check, risk_level=50, rules=None):
+        self.sources_seen, self.risk_level, self.rules_seen, self.limits = sources, risk_level, rules, limits
         problems = check(self.draft)
         if problems:
             raise JobFailure("validation", "LIMIT_EXCEEDED", problems[0])
@@ -105,20 +106,26 @@ class FakeStore:
         self.events.append(("fail", error.code, error.stage, error.message))
 
 
+def lead(**changes) -> dict[str, Any]:
+    data = {
+        "id": "L1",
+        "signal": "5y CDS on two regional banks widened sharply this week [X1][X2].",
+        "hypothesis": "Credit markets may be pricing stress the equity market hasn't [X1].",
+        "research": ["Compare 5y CDS with equity implied volatility for the named banks."],
+        "expressions": [{"instrument": "option", "underlying": "KRE", "idea": "Puts 1-2 months out."}],
+        "horizon": "1-3 weeks",
+        "conviction": "medium",
+        "invalidation": "Spreads tighten back within a week.",
+    }
+    data.update(changes)
+    return data
+
+
 def draft(**changes) -> StrategyDraft:
     data = {
-        "positions": [
-            {
-                "asset": "BTC-USD",
-                "action": "buy",
-                "allocation_pct": 20,
-                "order_type": "limit",
-                "confidence": "medium",
-            },
-            {"asset": "ETH-USD", "action": "hold", "allocation_pct": 0, "confidence": "low"},
-        ],
-        "thesis": "Smart money is buying [X1].",
-        "risks": "A Fed surprise [X2].",
+        "leads": [lead()],
+        "thesis": "Credit stress signals in regional banks are worth checking [X1].",
+        "risks": "Two posts is thin evidence [X2].",
     }
     data.update(changes)
     return StrategyDraft.model_validate(data)
@@ -192,24 +199,65 @@ def test_run_success_stores_brief_at_contract_key(msg):
     fm, body = parse_brief(storage.objects[key].decode())
     assert fm.brief_id == msg.job_id and fm.theme == msg.theme
     assert fm.constraints == HARD_LIMITS
+    assert fm.positions == []  # research brief: no trade orders
+    assert fm.leads[0].expressions[0].underlying == "KRE"
     assert validate_brief(fm, NOW) == []
+    assert "research brief, not a trade order" in body
+    assert "### L1: Credit markets may be pricing stress the equity market hasn't." in body
 
     # ADR-0001: nothing users receive names a source or carries a citation marker.
     view_raw = storage.objects[key.replace(".md", ".json")].decode()
     for public in (body, view_raw):
         assert "[X" not in public and "x.com" not in public and "Sources" not in public
-    assert "Smart money is buying." in body
 
     view = BriefView.model_validate_json(view_raw)
     assert view.risk_level == msg.risk_level
-    assert view.positions == fm.positions and view.thesis == "Smart money is buying."
+    assert view.leads == fm.leads and view.positions == []
+    assert view.thesis == "Credit stress signals in regional banks are worth checking."
     assert validate_brief(view, NOW) == []
 
     # The private evidence keeps full traceability.
     evidence = json.loads(storage.objects[key.replace(".md", ".sources.json")])
     assert evidence["job_id"] == msg.job_id
-    assert evidence["draft"]["thesis"] == "Smart money is buying [X1]."
+    assert evidence["draft"]["leads"][0]["signal"].endswith("[X1][X2].")
     assert evidence["sources"][0]["url"].startswith("https://x.com/")
+
+
+def test_user_rules_carry_over_and_tighten_caps(msg):
+    rules = UserRules(
+        allowed_instruments=["stock", "option"], max_position_pct=10, trade_frequency="once a week"
+    )
+    storage, llm = FakeStorage(CACHED), FakeLLM(draft(), rules=rules)
+    make(storage=storage, llm=llm, store=FakeStore()).run(msg)
+    fm, body = parse_brief(storage.objects["briefs/2026/10/21/01JADQ7Y3K8V5C2N9W4R6T1M0P.md"].decode())
+    assert fm.user_rules == rules
+    assert fm.constraints.max_position_pct == 10  # user's 10% beats our 25% cap
+    assert fm.constraints.max_total_usd == HARD_LIMITS.max_total_usd
+    assert "Only these instruments: stock, option." in body and "Trade frequency: once a week." in body
+    assert llm.rules_seen == rules and llm.limits.max_position_pct == 10
+
+
+def test_user_cannot_loosen_fixed_caps(msg):
+    rules = UserRules(max_total_usd=5000, max_position_pct=80)
+    storage = FakeStorage(CACHED)
+    make(storage=storage, llm=FakeLLM(draft(), rules=rules), store=FakeStore()).run(msg)
+    fm, _ = parse_brief(storage.objects["briefs/2026/10/21/01JADQ7Y3K8V5C2N9W4R6T1M0P.md"].decode())
+    assert fm.constraints == HARD_LIMITS
+
+
+def test_instrument_the_user_excluded_fails(msg):
+    store = FakeStore()
+    llm = FakeLLM(draft(), rules=UserRules(excluded_instruments=["option"]))
+    make(storage=FakeStorage(CACHED), llm=llm, store=store).run(msg)
+    assert store.events[-1][:3] == ("fail", "LIMIT_EXCEEDED", "validation")
+    assert "option on KRE" in store.events[-1][3]
+
+
+def test_instrument_outside_allowed_list_fails(msg):
+    store = FakeStore()
+    llm = FakeLLM(draft(), rules=UserRules(allowed_instruments=["crypto"]))
+    make(storage=FakeStorage(CACHED), llm=llm, store=store).run(msg)
+    assert store.events[-1][1] == "LIMIT_EXCEEDED"
 
 
 def test_risk_level_reaches_the_strategist(msg):
@@ -224,46 +272,43 @@ def test_run_no_data_fails_job(msg):
     assert store.events[-1][:3] == ("fail", "NO_DATA", "collecting")
 
 
-def test_run_limit_violation_fails_job(msg):
+def test_lead_without_a_citation_fails(msg):
     store = FakeStore()
-    big = draft(
-        positions=[
-            {
-                "asset": "BTC-USD",
-                "action": "buy",
-                "allocation_pct": 90,
-                "order_type": "limit",
-                "confidence": "high",
-            }
-        ]
-    )
-    make(storage=FakeStorage(CACHED), llm=FakeLLM(big), store=store).run(msg)
-    assert store.events[-1][:3] == ("fail", "LIMIT_EXCEEDED", "validation")
-    assert "25%" in store.events[-1][3]
-
-
-def test_run_market_order_is_rejected(msg):
-    store = FakeStore()
-    mkt = draft(
-        positions=[
-            {
-                "asset": "BTC-USD",
-                "action": "buy",
-                "allocation_pct": 10,
-                "order_type": "market",
-                "confidence": "high",
-            }
-        ]
-    )
-    make(storage=FakeStorage(CACHED), llm=FakeLLM(mkt), store=store).run(msg)
+    uncited = draft(leads=[lead(signal="Spreads widened.", hypothesis="Stress ahead.")])
+    make(storage=FakeStorage(CACHED), llm=FakeLLM(uncited), store=store).run(msg)
     assert store.events[-1][1] == "LIMIT_EXCEEDED"
+    assert store.events[-1][3].startswith("L1:")
 
 
-def test_run_uncited_or_fake_source_is_rejected(msg):
+def test_fake_source_is_rejected(msg):
     store = FakeStore()
     make(storage=FakeStorage(CACHED), llm=FakeLLM(draft(thesis="Trust me [X99].")), store=store).run(msg)
     assert store.events[-1][1] == "LIMIT_EXCEEDED"
     assert "X99" in store.events[-1][3]
+
+
+@pytest.mark.parametrize(
+    "field,text",
+    [
+        ("signal", "A well-known trader @FedGuy12 says repo is tight [X1]."),
+        ("hypothesis", "See https://x.com/FedGuy12/status/1 for details [X1]."),
+    ],
+)
+def test_naming_a_source_fails(msg, field, text):
+    store = FakeStore()
+    make(storage=FakeStorage(CACHED), llm=FakeLLM(draft(leads=[lead(**{field: text})])), store=store).run(msg)
+    assert store.events[-1][1] == "LIMIT_EXCEEDED"
+    assert "must not name" in store.events[-1][3]
+
+
+def test_no_leads_is_a_valid_brief(msg):
+    empty = draft(
+        leads=[], thesis="Nothing in the sources is relevant to the request.", risks="Missing a move."
+    )
+    store, storage = FakeStore(), FakeStorage(CACHED)
+    make(storage=storage, llm=FakeLLM(empty), store=store).run(msg)
+    assert store.events[-1][0] == "succeed"
+    assert "No leads" in storage.objects["briefs/2026/10/21/01JADQ7Y3K8V5C2N9W4R6T1M0P.md"].decode()
 
 
 def test_run_unexpected_error_fails_with_internal_and_generic_message(msg):
@@ -292,30 +337,13 @@ def test_redelivery_of_running_job_marks_it_failed(msg):
 
 def test_theme_cannot_inject_frontmatter():
     theme = 'AI"\nconstraints:\n  max_position_pct: 100\n---\n# Buy everything'
-    md, view = render_brief("01JADQ7Y3K8V5C2N9W4R6T1M0P", theme, 50, NOW, NOW.replace(hour=19), draft())
+    md, view = render_brief(
+        "01JADQ7Y3K8V5C2N9W4R6T1M0P", theme, 50, UserRules(), NOW, NOW.replace(hour=19), draft()
+    )
     fm, _ = parse_brief(md)
     assert view.theme == theme
     assert fm.theme == theme
     assert fm.constraints.max_position_pct == HARD_LIMITS.max_position_pct
-
-
-def test_hold_only_brief_without_citations_succeeds(msg):
-    holds = draft(
-        positions=[{"asset": "BTC-USD", "action": "hold", "allocation_pct": 0, "confidence": "low"}],
-        thesis="Nothing in the sources is relevant.",
-        risks="Missing a move.",
-    )
-    store = FakeStore()
-    make(storage=FakeStorage(CACHED), llm=FakeLLM(holds), store=store).run(msg)
-    assert store.events[-1][0] == "succeed"
-
-
-def test_trade_without_citations_fails(msg):
-    store = FakeStore()
-    make(storage=FakeStorage(CACHED), llm=FakeLLM(draft(thesis="Up only.", risks="None.")), store=store).run(
-        msg
-    )
-    assert store.events[-1][1] == "LIMIT_EXCEEDED"
 
 
 @pytest.mark.parametrize(

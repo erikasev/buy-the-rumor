@@ -10,19 +10,22 @@ from app.llm import LLMAgent, StrategyDraft, get_llm_api_key
 from app.validator import HARD_LIMITS
 
 DRAFT = {
-    "positions": [
+    "leads": [
         {
-            "asset": "BTC-USD",
-            "action": "buy",
-            "allocation_pct": 20,
-            "order_type": "limit",
-            "entry": "limit at or below 1% under last price",
-            "confidence": "medium",
+            "id": "L1",
+            "signal": "Whale wallets moved BTC to exchanges [X1].",
+            "hypothesis": "Possible distribution ahead [X1].",
+            "research": ["Check exchange net inflows over 7 days."],
+            "expressions": [{"instrument": "crypto", "underlying": "BTC", "idea": "Watch for a breakdown."}],
+            "horizon": "days",
+            "conviction": "low",
+            "invalidation": "Inflows reverse.",
         }
     ],
-    "thesis": "Whales are accumulating [X1].",
-    "risks": "Macro rates [X1].",
+    "thesis": "On-chain flows hint at selling [X1].",
+    "risks": "Single source [X1].",
 }
+RULES = {"allowed_instruments": ["crypto"], "excluded_instruments": ["option"], "max_position_pct": 10}
 SOURCES = [
     {"source_id": "X1", "author_username": "lookonchain", "text": "BTC inflow", "created_at": "2026-10-21"}
 ]
@@ -85,14 +88,14 @@ def test_draft_strategy_returns_valid_draft_from_strong_model():
     client = client_returning(json.dumps(DRAFT))
     draft = agent(client).draft_strategy("AI", SOURCES, HARD_LIMITS, check=lambda d: [])
     assert isinstance(draft, StrategyDraft)
-    assert draft.positions[0].asset == "BTC-USD"
+    assert draft.leads[0].expressions[0].underlying == "BTC"
     assert client.chat.completions.create.call_args.kwargs["model"] == "s/strong"
 
 
 def test_draft_strategy_retries_once_after_malformed_output():
     client = client_returning("not json", json.dumps(DRAFT))
     draft = agent(client).draft_strategy("AI", SOURCES, HARD_LIMITS, check=lambda d: [])
-    assert draft.thesis.startswith("Whales")
+    assert draft.thesis.startswith("On-chain")
     retry_messages = client.chat.completions.create.call_args.kwargs["messages"]
     assert "rejected" in retry_messages[-1]["content"]
 
@@ -114,9 +117,9 @@ def test_draft_strategy_feeds_back_violations_then_fails_with_limit_exceeded():
     assert "Too big." in client.chat.completions.create.call_args.kwargs["messages"][-1]["content"]
 
 
-def test_draft_rejects_extra_fields_like_constraints():
+def test_draft_rejects_extra_fields_like_positions():
     client = client_returning(
-        json.dumps({**DRAFT, "constraints": {"max_position_pct": 100}}), json.dumps({**DRAFT, "x": 1})
+        json.dumps({**DRAFT, "positions": [{"asset": "BTC-USD"}]}), json.dumps({**DRAFT, "x": 1})
     )
     with pytest.raises(JobFailure) as exc:
         agent(client).draft_strategy("AI", SOURCES, HARD_LIMITS, check=lambda d: [])
@@ -137,3 +140,27 @@ def test_risk_level_is_in_the_strategist_prompt():
     client = client_returning(json.dumps(DRAFT))
     agent(client).draft_strategy("AI", SOURCES, HARD_LIMITS, check=lambda d: [], risk_level=15)
     assert "Risk appetite: 15" in client.chat.completions.create.call_args.kwargs["messages"][1]["content"]
+
+
+def test_strategist_prompt_frames_posts_as_leads_and_hides_authors():
+    client = client_returning(json.dumps(DRAFT))
+    agent(client).draft_strategy("AI", SOURCES, HARD_LIMITS, check=lambda d: [])
+    messages = client.chat.completions.create.call_args.kwargs["messages"]
+    assert "never as advice" in messages[0]["content"]
+    assert "@lookonchain" not in messages[1]["content"]  # author handle replaced by its focus
+    assert "On-chain smart money" in messages[1]["content"]
+
+
+def test_extract_rules_uses_cheap_model():
+    client = client_returning(json.dumps(RULES))
+    rules = agent(client).extract_rules("Crypto only, no options, max 10% per position")
+    assert rules.allowed_instruments == ["crypto"] and rules.max_position_pct == 10
+    assert not rules.allows("option") and rules.allows("crypto") and not rules.allows("stock")
+    assert client.chat.completions.create.call_args.kwargs["model"] == "c/cheap"
+
+
+def test_extract_rules_retries_then_fails_on_garbage():
+    client = client_returning("nope", '{"allowed_instruments": ["spaceships"]}')
+    with pytest.raises(JobFailure) as exc:
+        agent(client).extract_rules("whatever")
+    assert (exc.value.error.stage, exc.value.error.code) == ("theme_mapping", "LLM_INVALID_OUTPUT")

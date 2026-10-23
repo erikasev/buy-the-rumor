@@ -10,7 +10,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from app.brief import BriefFrontmatter, Constraints
+from app.brief import BriefFrontmatter, Constraints, UserRules
 
 MAX_VALIDITY = timedelta(hours=24)
 ALLOCATION_TOLERANCE = 1e-6  # floats like 33.3 + 33.3 + 33.4
@@ -24,6 +24,17 @@ HARD_LIMITS = Constraints(
     allowed_order_types=["limit"],
     stop_loss_pct=8,
 )
+
+# ADR-0001: nothing users receive may name a source. Catches URLs, x.com, and @handles
+# (but not email-like text such as a@b).
+_SOURCE_LEAK = re.compile(r"https?://|\bx\.com\b|(?<![\w.])@[A-Za-z0-9_]{2,15}\b")
+
+# An idea can describe a different instrument than its label ("etf on SPY: buy puts" is an
+# option trade). These catch the clear cases so a mislabel can't slip past the user's rules.
+_IMPLIED_INSTRUMENTS = {
+    "option": re.compile(r"\b(puts?|calls|call options?|options?|straddles?|strangles?|collars?)\b", re.I),
+    "future": re.compile(r"\bfutures?\b", re.I),
+}
 
 CITATION = re.compile(r"\[([A-Z]+\d+)\]")
 # Any citation-like marker, including ranges and lists such as [X1-X5] or [X1, X2].
@@ -41,13 +52,26 @@ class Violation:
     message: str
 
 
+def effective_limits(rules: UserRules | None) -> Constraints:
+    """The hard limits, tightened by any numeric limit the user stated. Never looser."""
+    h = HARD_LIMITS
+    if rules is None:
+        return h
+    return Constraints(
+        max_total_usd=min(h.max_total_usd, rules.max_total_usd or h.max_total_usd),
+        max_position_pct=min(h.max_position_pct, rules.max_position_pct or h.max_position_pct),
+        allowed_order_types=h.allowed_order_types,
+        stop_loss_pct=min(h.stop_loss_pct, rules.stop_loss_pct or h.stop_loss_pct),
+    )
+
+
 def validate_brief(fm: BriefFrontmatter, now: datetime) -> list[Violation]:
     """Return every violation found. An empty list means the brief is valid."""
     v: list[Violation] = []
     c = fm.constraints
-    h = HARD_LIMITS
+    h = effective_limits(fm.user_rules)
 
-    # The brief's own limits must sit inside the hard limits
+    # The brief's own limits must sit inside the hard limits and the user's rules
     if c.max_total_usd > h.max_total_usd:
         v.append(Violation("budget_too_high", f"The budget may be at most ${h.max_total_usd:g}."))
     if c.max_position_pct > h.max_position_pct:
@@ -104,6 +128,31 @@ def validate_brief(fm: BriefFrontmatter, now: datetime) -> list[Violation]:
                 )
             )
 
+    # Research leads: unique ids, and only instruments the user's rules allow
+    lead_ids = [lead.id for lead in fm.leads]
+    if len(set(lead_ids)) != len(lead_ids):
+        v.append(Violation("duplicate_lead", "Each lead needs its own id."))
+    rules = fm.user_rules or UserRules()
+    for lead in fm.leads:
+        for e in lead.expressions:
+            for implied, pattern in _IMPLIED_INSTRUMENTS.items():
+                if implied != e.instrument and pattern.search(e.idea) and not rules.allows(implied):
+                    v.append(
+                        Violation(
+                            "instrument_not_allowed",
+                            f"{lead.id} describes a {implied} trade on {e.underlying}, "
+                            "which the user's rules don't allow.",
+                        )
+                    )
+            if not rules.allows(e.instrument):
+                v.append(
+                    Violation(
+                        "instrument_not_allowed",
+                        f"{lead.id} suggests a {e.instrument} on {e.underlying}, "
+                        "which the user's rules don't allow.",
+                    )
+                )
+
     # Totals
     total = sum(p.allocation_pct for p in fm.positions if p.action == "buy")
     if total > 100 + ALLOCATION_TOLERANCE:
@@ -127,4 +176,16 @@ def validate_citations(body: str, source_ids: set[str], require: bool = True) ->
         return [
             Violation("unknown_source", f"The brief cites sources that do not exist: {', '.join(unknown)}.")
         ]
+    return []
+
+
+def validate_public_text(texts: list[str]) -> list[Violation]:
+    """Text users receive must not name a source: no URLs, x.com, or @handles (ADR-0001)."""
+    for text in texts:
+        if _SOURCE_LEAK.search(text):
+            return [
+                Violation(
+                    "source_named", "The brief must not name accounts, handles or links; describe the signal."
+                )
+            ]
     return []

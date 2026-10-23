@@ -4,7 +4,7 @@ Instructions for AI coding agents (and humans) working in this folder.
 
 ## What this is
 
-The Python agent pipeline for Buy the Rumor. It runs on AWS Lambda as a container image, triggered by SQS. It turns a theme into a validated trading brief in Markdown. See `docs/design.md` for the architecture and `docs/contracts/job-v1.md` for the job contract.
+The Python agent pipeline for Buy the Rumor. It runs on AWS Lambda as a container image, triggered by SQS. It turns a theme into a validated research brief in Markdown: leads for another agent to investigate, bounded by the user's own rules (docs/adr/0002-briefs-are-research-leads.md). See `docs/design.md` for the architecture and `docs/contracts/job-v1.md` for the job contract.
 
 ## Layout
 
@@ -17,7 +17,7 @@ worker/
     jobs.py        DynamoDB job record, conditional status transitions
     storage.py     S3: collected-data/ batches and brief files
     twitter.py     X API v2 collector
-    llm.py         OpenRouter LLM stages (account selection, strategist)
+    llm.py         OpenRouter LLM stages (rules extraction, account selection, strategist)
     config.py      settings.yaml and secrets (env vars; .env.local locally)
     brief.py       Brief schema and frontmatter parsing
     validator.py   Hard risk limits and citation checks, enforced in code

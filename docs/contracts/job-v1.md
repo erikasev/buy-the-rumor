@@ -135,6 +135,10 @@ The structured form of the brief, which the web page renders. It has the brief's
 | `risk_level` | integer | 0 to 100, as requested |
 | `thesis` | string | Plain text, may contain line breaks |
 | `risks` | string | Plain text: what could go wrong and what would change the plan |
+| `user_rules` | object, optional | The trading rules the user stated, read from their request; carried over unchanged (ADR-0002). Fields: `allowed_instruments`, `excluded_instruments` (instrument classes: `stock`, `etf`, `option`, `future`, `crypto`, `bond`, `fx`, `commodity`; empty means not restricted), `sectors`, `excluded_sectors`, `max_total_usd`, `max_position_pct`, `stop_loss_pct`, `trade_frequency`, `horizon` (null when not stated), `other` (any other rule, verbatim) |
+| `leads` | list, optional | Research leads (ADR-0002), at most 6. Each: `id` (`L1`...), `signal`, `hypothesis`, `research` (list of steps), `expressions` (list of `{instrument, underlying, idea}`), `horizon`, `conviction` (`low`/`medium`/`high`), `invalidation` |
+
+`thesis` holds the overview of the leads. `positions` may be an empty list: briefs are research leads, not trade orders. `constraints` is the fixed caps tightened by any number in `user_rules`, never looser. `user_rules` and `leads` were added after v1 was first merged (additive); older briefs don't have them.
 
 It never contains sources or citation markers (ADR-0001). The worker writes it after the brief passes validation, from the same data as the `.md`. If it is missing or unreadable, the web page falls back to showing the raw `.md`. Example: `contracts/fixtures/brief_view.json`.
 
