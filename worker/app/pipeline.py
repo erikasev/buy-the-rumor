@@ -40,6 +40,7 @@ from app.contract import (
 )
 from app.jobs import JobStore
 from app.llm import LLMAgent, StrategyDraft
+from app.sources import focus_by_handle, load_sources
 from app.storage import S3DataStorage
 from app.twitter import TwitterAPIError, TwitterCollector
 from app.validator import (
@@ -258,10 +259,11 @@ class Pipeline:
         enter("theme_mapping")
         rules = self.llm.extract_rules(msg.theme)
         _log("rules_extracted", job_id=msg.job_id, rules=rules.model_dump(exclude_defaults=True))
-        accounts = setting(self.settings, "twitter.accounts", [])
-        if not accounts:
-            raise JobFailure("theme_mapping", "INTERNAL", "No sources are configured.")
-        selected = self.llm.select_top_accounts(msg.theme, accounts, top_n=int(self._cfg("top_accounts", 5)))
+        followed = load_sources(self.storage, self.settings)
+        focus = focus_by_handle(followed)
+        selected = self.llm.select_top_accounts(
+            msg.theme, [f.handle for f in followed], top_n=int(self._cfg("top_accounts", 5)), focus=focus
+        )
         _log("accounts_selected", job_id=msg.job_id, accounts=selected)
 
         enter("collecting")
@@ -305,6 +307,7 @@ class Pipeline:
             effective_limits(rules),
             risk_level=msg.risk_level,
             rules=rules,
+            focus=focus,
             check=lambda d: violations(d, generated_at),
         )
 

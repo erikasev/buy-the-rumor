@@ -233,6 +233,10 @@ class S3DataStorage:
 
         return self.put(key, body, content_type)
 
+    def get(self, key: str) -> bytes:
+        """Read one object. Raises botocore's ClientError if it is missing or unreadable."""
+        return self.s3_client.get_object(Bucket=self.bucket_name, Key=key)["Body"].read()
+
     def put(self, key: str, body: bytes, content_type: str) -> str:
         """Write one object and return its key."""
         try:

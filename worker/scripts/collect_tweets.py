@@ -11,12 +11,14 @@ worker_dir = Path(__file__).resolve().parent.parent
 if str(worker_dir) not in sys.path:
     sys.path.insert(0, str(worker_dir))
 
+from app.contract import JobFailure  # noqa: E402
+from app.sources import load_sources  # noqa: E402
 from app.storage import S3DataStorage, load_settings  # noqa: E402
 from app.twitter import TwitterCollector, collect_and_save_tweets  # noqa: E402
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Collect tweets from accounts in settings.yaml")
+    parser = argparse.ArgumentParser(description="Collect tweets from the accounts in config/sources.json")
     parser.add_argument("--days", type=int, default=3, help="Days of tweet history to fetch (default: 3)")
     parser.add_argument(
         "--limit-accounts", type=int, default=None, help="Limit number of accounts to fetch (for testing)"
@@ -30,10 +32,10 @@ def main():
     print("Buy the Rumor — Twitter/X Collection")
     print("=" * 60)
 
-    settings = load_settings()
-    accounts = settings.get("twitter", {}).get("accounts", [])
-    if not accounts:
-        print("[ERROR] No twitter accounts found in settings.yaml", file=sys.stderr)
+    try:
+        accounts = [s.handle for s in load_sources(S3DataStorage(), load_settings())]
+    except JobFailure:
+        print("[ERROR] Could not load config/sources.json from the bucket (see log above)", file=sys.stderr)
         sys.exit(1)
 
     if args.limit_accounts:

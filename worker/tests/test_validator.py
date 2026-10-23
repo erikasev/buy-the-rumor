@@ -198,7 +198,7 @@ def test_duplicate_lead_ids_fail():
 @pytest.mark.parametrize(
     "text,leaks",
     [
-        ("A trader @FedGuy12 notes repo stress.", True),
+        ("A trader @repo_desk notes repo stress.", True),
         ("Details at https://example.com/post", True),
         ("Posted on x.com yesterday.", True),
         ("Email ops@company.com about it.", False),

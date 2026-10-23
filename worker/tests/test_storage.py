@@ -9,8 +9,13 @@ from app.storage import S3DataStorage, load_settings
 def test_load_settings_finds_bucket():
     settings = load_settings()
     assert settings.get("bucket_name") == "hackathon-btr-351611731335-us-east-2-an"
-    assert "twitter" in settings
-    assert len(settings["twitter"]["accounts"]) > 0
+    assert settings["sources_key"] == "config/sources.json"
+
+
+def test_followed_accounts_are_not_in_the_repo():
+    # ADR-0001: the account list lives in the bucket (config/sources.json), never in settings.yaml.
+    settings = load_settings()
+    assert "twitter" not in settings and "@" not in str(settings)
 
 
 def test_storage_init_from_settings():

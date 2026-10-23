@@ -35,34 +35,11 @@ worker:
   brief_validity_hours: 6 # expires_at = generated_at + this (hard cap 24)
 
 # ---------------------------------------------------------
-# Twitter Accounts
+# X accounts
 # ---------------------------------------------------------
-twitter:
-  # Accounts to Track
-  accounts:
-    - '@JulianKlymochko'
-    - '@AlderLaneEggs'
-    - '@FedGuy12'
-    - '@agnostoxxx'
-    - '@Ed_Fin'
-    - '@TankerTrackers'
-    - '@BurggrabenH'
-    - '@LSREnergy'
-    - '@davereeth'
-    - '@dampedspring'
-    - '@crossbordercap'
-    - '@BobEUnlimited'
-    - '@DiMartinoBooth'
-    - '@MacroAlf'
-    - '@LynAldenContact'
-    - '@LukeGromen'
-    - '@JeffSnider_EDU'
-    - '@cangsizhi'
-    - '@blondesnmoney'
-    - '@hkuppy'
-    - '@AndyBiotech'
-    - '@lookonchain'
-    - '@JuneGoh_Sparta'
+# The followed accounts are private (ADR-0001) and not kept in the repo. They live in the
+# bucket at `sources_key`; edit that file to change them (read fresh for every job).
+sources_key: "config/sources.json"
 
 # ---------------------------------------------------------
 # AWS (env vars BRIEFS_BUCKET_NAME, JOBS_TABLE_NAME, JOBS_QUEUE_URL, AWS_REGION override these)

@@ -13,9 +13,14 @@ from app.pipeline import Pipeline, render_brief
 from app.validator import HARD_LIMITS, validate_brief
 
 NOW = datetime(2026, 10, 21, 13, 0, 30, tzinfo=timezone.utc)
-SETTINGS = {
-    "twitter": {"accounts": ["@lookonchain", "@FedGuy12", "@MacroAlf"]},
-    "worker": {"top_accounts": 2, "max_tweets_per_account": 2, "max_sources": 10},
+SETTINGS = {"worker": {"top_accounts": 2, "max_tweets_per_account": 2, "max_sources": 10}}
+SOURCES_FILE = {
+    "version": 1,
+    "accounts": [
+        {"handle": "@whale_watch", "focus": "On-chain flows"},
+        {"handle": "@repo_desk", "focus": "Repo markets"},
+        {"handle": "@macro_notes", "focus": "Macro cycle"},
+    ],
 }
 
 
@@ -41,7 +46,14 @@ class FakeStorage:
                 data["accounts"] = batch_accounts
             self.batch = data
         self.saved_batches: list[Any] = []
-        self.objects: dict[str, bytes] = {}
+        self.objects: dict[str, bytes] = {"config/sources.json": json.dumps(SOURCES_FILE).encode()}
+
+    def get(self, key):
+        if key not in self.objects:
+            from botocore.exceptions import ClientError
+
+            raise ClientError({"Error": {"Code": "NoSuchKey"}}, "GetObject")
+        return self.objects[key]
 
     def get_latest_batch(self, max_age_hours=None):
         return {"prefix": "collected-data/2026-10-21T12-00-00Z/"} if self.batch else None
@@ -76,10 +88,11 @@ class FakeLLM:
     def extract_rules(self, theme):
         return self.rules
 
-    def select_top_accounts(self, theme, accounts, top_n):
+    def select_top_accounts(self, theme, accounts, top_n, focus=None):
+        self.accounts_seen, self.focus_seen = accounts, focus
         return accounts[:top_n]
 
-    def draft_strategy(self, theme, sources, limits, check, risk_level=50, rules=None):
+    def draft_strategy(self, theme, sources, limits, check, risk_level=50, rules=None, focus=None):
         self.sources_seen, self.risk_level, self.rules_seen, self.limits = sources, risk_level, rules, limits
         problems = check(self.draft)
         if problems:
@@ -149,28 +162,28 @@ def make(storage=None, llm=None, store=None, collector=None):
 
 
 CACHED = [
-    tweet("1", "lookonchain", "2026-10-21T10:00:00Z"),
-    tweet("2", "FedGuy12", "2026-10-21T11:00:00Z"),
-    tweet("3", "lookonchain", "2026-10-21T09:00:00Z"),
-    tweet("4", "lookonchain", "2026-10-21T08:00:00Z"),  # over the per-account cap of 2
-    tweet("5", "MacroAlf", "2026-10-21T12:00:00Z"),  # not a selected account
+    tweet("1", "whale_watch", "2026-10-21T10:00:00Z"),
+    tweet("2", "repo_desk", "2026-10-21T11:00:00Z"),
+    tweet("3", "whale_watch", "2026-10-21T09:00:00Z"),
+    tweet("4", "whale_watch", "2026-10-21T08:00:00Z"),  # over the per-account cap of 2
+    tweet("5", "macro_notes", "2026-10-21T12:00:00Z"),  # not a selected account
 ]
 
 
 def test_cache_hit_filters_to_selected_accounts_caps_and_renumbers():
     collector = FakeCollector([])
-    p = make(storage=FakeStorage(CACHED, ["lookonchain", "FedGuy12", "MacroAlf"]), collector=collector)
-    sources = p.collect(["@lookonchain", "@FedGuy12"])
+    p = make(storage=FakeStorage(CACHED, ["whale_watch", "repo_desk", "macro_notes"]), collector=collector)
+    sources = p.collect(["@whale_watch", "@repo_desk"])
     assert [s["tweet_id"] for s in sources] == ["2", "1", "3"]
     assert [s["source_id"] for s in sources] == ["X1", "X2", "X3"]
     assert collector.requested == []  # nothing missing, so no scrape
 
 
 def test_scrapes_only_accounts_missing_from_cache_and_saves_batch():
-    storage = FakeStorage([tweet("1", "lookonchain", "2026-10-21T10:00:00Z")], ["lookonchain"])
-    collector = FakeCollector([tweet("9", "FedGuy12", "2026-10-21T12:30:00Z")])
-    sources = make(storage=storage, collector=collector).collect(["@lookonchain", "@FedGuy12"])
-    assert collector.requested == ["@FedGuy12"]
+    storage = FakeStorage([tweet("1", "whale_watch", "2026-10-21T10:00:00Z")], ["whale_watch"])
+    collector = FakeCollector([tweet("9", "repo_desk", "2026-10-21T12:30:00Z")])
+    sources = make(storage=storage, collector=collector).collect(["@whale_watch", "@repo_desk"])
+    assert collector.requested == ["@repo_desk"]
     assert len(storage.saved_batches) == 1
     assert [s["tweet_id"] for s in sources] == ["9", "1"]
 
@@ -181,7 +194,7 @@ def test_no_cache_and_no_x_token_gives_no_sources():
 
     p = make()
     p.collector_factory = no_token
-    assert p.collect(["@lookonchain"]) == []
+    assert p.collect(["@whale_watch"]) == []
 
 
 def test_run_success_stores_brief_at_contract_key(msg):
@@ -290,8 +303,8 @@ def test_fake_source_is_rejected(msg):
 @pytest.mark.parametrize(
     "field,text",
     [
-        ("signal", "A well-known trader @FedGuy12 says repo is tight [X1]."),
-        ("hypothesis", "See https://x.com/FedGuy12/status/1 for details [X1]."),
+        ("signal", "A well-known trader @repo_desk says repo is tight [X1]."),
+        ("hypothesis", "See https://x.com/repo_desk/status/1 for details [X1]."),
     ],
 )
 def test_naming_a_source_fails(msg, field, text):
@@ -359,3 +372,17 @@ def test_strip_citations(text, expected):
     from app.validator import strip_citations
 
     assert strip_citations(text) == expected
+
+
+def test_accounts_and_focus_come_from_the_bucket_file(msg):
+    llm = FakeLLM(draft())
+    make(storage=FakeStorage(CACHED), llm=llm, store=FakeStore()).run(msg)
+    assert llm.accounts_seen == ["@whale_watch", "@repo_desk", "@macro_notes"]
+    assert llm.focus_seen["repo_desk"] == "Repo markets"
+
+
+def test_missing_sources_file_fails_the_job(msg):
+    storage, store = FakeStorage(CACHED), FakeStore()
+    del storage.objects["config/sources.json"]
+    make(storage=storage, store=store).run(msg)
+    assert store.events[-1] == ("fail", "INTERNAL", "theme_mapping", "No sources are configured.")

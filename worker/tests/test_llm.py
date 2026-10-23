@@ -27,7 +27,7 @@ DRAFT = {
 }
 RULES = {"allowed_instruments": ["crypto"], "excluded_instruments": ["option"], "max_position_pct": 10}
 SOURCES = [
-    {"source_id": "X1", "author_username": "lookonchain", "text": "BTC inflow", "created_at": "2026-10-21"}
+    {"source_id": "X1", "author_username": "whale_watch", "text": "BTC inflow", "created_at": "2026-10-21"}
 ]
 
 
@@ -58,16 +58,16 @@ def test_get_llm_api_key_missing(monkeypatch):
 
 
 def test_select_top_accounts_uses_cheap_model_and_parses_json():
-    client = client_returning('{"accounts": ["@lookonchain", "@dylan522p", "@notInList", "@FedGuy12"]}')
-    accounts = ["@JulianKlymochko", "@lookonchain", "@dylan522p", "@FedGuy12"]
+    client = client_returning('{"accounts": ["@whale_watch", "@chip_notes", "@notInList", "@repo_desk"]}')
+    accounts = ["@spac_arb", "@whale_watch", "@chip_notes", "@repo_desk"]
     top = agent(client).select_top_accounts(theme="Bitcoin on-chain", accounts=accounts, top_n=3)
-    assert top == ["@lookonchain", "@dylan522p", "@FedGuy12"]
+    assert top == ["@whale_watch", "@chip_notes", "@repo_desk"]
     assert client.chat.completions.create.call_args.kwargs["model"] == "c/cheap"
 
 
 def test_select_top_accounts_accepts_bare_list():
-    client = client_returning('```json\n["@lookonchain"]\n```')
-    assert agent(client).select_top_accounts("x", ["@a", "@lookonchain"], top_n=2) == ["@lookonchain"]
+    client = client_returning('```json\n["@whale_watch"]\n```')
+    assert agent(client).select_top_accounts("x", ["@a", "@whale_watch"], top_n=2) == ["@whale_watch"]
 
 
 def test_select_top_accounts_fallback_on_error():
@@ -144,11 +144,21 @@ def test_risk_level_is_in_the_strategist_prompt():
 
 def test_strategist_prompt_frames_posts_as_leads_and_hides_authors():
     client = client_returning(json.dumps(DRAFT))
-    agent(client).draft_strategy("AI", SOURCES, HARD_LIMITS, check=lambda d: [])
+    focus = {"whale_watch": "On-chain smart money tracking"}
+    agent(client).draft_strategy("AI", SOURCES, HARD_LIMITS, check=lambda d: [], focus=focus)
     messages = client.chat.completions.create.call_args.kwargs["messages"]
     assert "never as advice" in messages[0]["content"]
-    assert "@lookonchain" not in messages[1]["content"]  # author handle replaced by its focus
-    assert "On-chain smart money" in messages[1]["content"]
+    assert "@whale_watch" not in messages[1]["content"]  # author handle replaced by its focus
+    assert "On-chain smart money tracking" in messages[1]["content"]
+
+
+def test_account_picker_sees_each_accounts_focus():
+    client = client_returning('{"accounts": ["@repo_desk"]}')
+    focus = {"repo_desk": "Repo markets and bank liquidity"}
+    agent(client).select_top_accounts("Bank stress", ["@whale_watch", "@repo_desk"], top_n=1, focus=focus)
+    prompt = client.chat.completions.create.call_args.kwargs["messages"][1]["content"]
+    assert "- @repo_desk: Repo markets and bank liquidity" in prompt
+    assert "- @whale_watch: Financial and market commentary" in prompt  # no description given
 
 
 def test_repo_settings_have_fallbacks():

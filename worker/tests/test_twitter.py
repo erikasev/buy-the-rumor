@@ -22,8 +22,8 @@ def test_twitter_collector_requires_token(monkeypatch):
 def test_get_users_by_usernames():
     mock_resp_data = {
         "data": [
-            {"id": "101", "name": "Lookonchain", "username": "lookonchain"},
-            {"id": "102", "name": "FedGuy", "username": "FedGuy12"},
+            {"id": "101", "name": "Whale Watch", "username": "whale_watch"},
+            {"id": "102", "name": "Repo Desk", "username": "repo_desk"},
         ]
     }
     mock_resp = MagicMock()
@@ -32,11 +32,11 @@ def test_get_users_by_usernames():
 
     with patch("urllib.request.urlopen", return_value=mock_resp):
         collector = TwitterCollector(bearer_token="dummy-token")
-        users = collector.get_users_by_usernames(["@lookonchain", "FedGuy12"])
-        assert "lookonchain" in users
-        assert users["lookonchain"]["id"] == "101"
-        assert "fedguy12" in users
-        assert users["fedguy12"]["id"] == "102"
+        users = collector.get_users_by_usernames(["@whale_watch", "repo_desk"])
+        assert "whale_watch" in users
+        assert users["whale_watch"]["id"] == "101"
+        assert "repo_desk" in users
+        assert users["repo_desk"]["id"] == "102"
 
 
 def test_get_user_tweets():
@@ -75,7 +75,7 @@ def test_get_user_tweets_handles_rate_limit():
 
 def test_collect_tweets_formats_sources():
     collector = TwitterCollector(bearer_token="dummy-token")
-    mock_user_map = {"lookonchain": {"id": "101", "name": "Lookonchain", "username": "lookonchain"}}
+    mock_user_map = {"whale_watch": {"id": "101", "name": "Whale Watch", "username": "whale_watch"}}
     mock_tweets = [
         {
             "id": "t1",
@@ -87,16 +87,19 @@ def test_collect_tweets_formats_sources():
 
     with patch.object(collector, "get_users_by_usernames", return_value=mock_user_map):
         with patch.object(collector, "get_user_tweets", return_value=mock_tweets):
-            result = collector.collect_tweets(accounts=["@lookonchain"], days=3)
+            result = collector.collect_tweets(accounts=["@whale_watch"], days=3)
             assert result["total_tweets"] == 1
             tweet = result["tweets"][0]
             assert tweet["source_id"] == "X1"
-            assert tweet["author_username"] == "lookonchain"
-            assert "https://x.com/lookonchain/status/t1" in tweet["url"]
+            assert tweet["author_username"] == "whale_watch"
+            assert "https://x.com/whale_watch/status/t1" in tweet["url"]
 
 
 def test_collect_and_save_tweets_calls_s3():
     mock_storage = MagicMock()
+    mock_storage.get.return_value = json.dumps(
+        {"version": 1, "accounts": [{"handle": "@whale_watch", "focus": "On-chain flows"}]}
+    ).encode()
     mock_storage.save_batch.return_value = "collected-data/2026-10-18T00-00-00Z/tweets.json"
 
     with patch("app.twitter.TwitterCollector") as mock_col_cls:
@@ -108,6 +111,7 @@ def test_collect_and_save_tweets_calls_s3():
         }
 
         data, s3_key = collect_and_save_tweets(storage=mock_storage, days=3)
+        assert mock_instance.collect_tweets.call_args.kwargs["accounts"] == ["@whale_watch"]
         assert data["total_tweets"] == 5
         assert s3_key == "collected-data/2026-10-18T00-00-00Z/tweets.json"
         mock_storage.save_batch.assert_called_once()

@@ -15,6 +15,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from app.config import get_secret, load_settings
+from app.sources import load_sources
 from app.storage import S3DataStorage
 
 logger = logging.getLogger(__name__)
@@ -80,7 +81,7 @@ class TwitterCollector:
 
         Returns a dictionary mapping lowercased username to user metadata:
         {
-            "lookonchain": {"id": "1462727797135216641", "name": "Lookonchain", "username": "lookonchain"}
+            "example_user": {"id": "1234567890", "name": "Example User", "username": "Example_User"}
         }
         """
         clean_names = [u.lstrip("@").strip() for u in usernames if u.strip()]
@@ -276,20 +277,17 @@ def collect_and_save_tweets(
     days: int = 3,
     max_results_per_user: int = 100,
 ) -> tuple[dict[str, Any], str]:
-    """Orchestrates collecting tweets from accounts in settings.yaml and saving to S3.
+    """Collect tweets from every followed account (config/sources.json) and save them to S3.
 
     Returns (collection_data, s3_key).
     """
-    settings = load_settings()
-    accounts = settings.get("twitter", {}).get("accounts", [])
-    if not accounts:
-        raise ValueError("No twitter accounts found in settings.yaml under 'twitter.accounts'")
+    s3_storage = storage or S3DataStorage()
+    accounts = [s.handle for s in load_sources(s3_storage, load_settings())]
 
     collector = TwitterCollector()
     logger.info("Collecting tweets for %d accounts (last %d days)...", len(accounts), days)
     data = collector.collect_tweets(accounts=accounts, days=days, max_results_per_user=max_results_per_user)
 
-    s3_storage = storage or S3DataStorage()
     timestamp_folder = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%SZ")
     s3_key = s3_storage.save_batch(
         data=data,
