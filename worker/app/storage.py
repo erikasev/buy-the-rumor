@@ -1,8 +1,7 @@
 """S3 storage and data collection retrieval.
 
-Handles reading and writing collected data to/from S3 with the prefix:
-`collected-data/{timestamp}/`
-as specified in AGENTS.md and settings.yaml.
+Handles reading and writing collected data to/from S3 under the prefix
+`collected-data/{timestamp}/`, in the bucket named by settings.yaml or BRIEFS_BUCKET_NAME.
 """
 
 from __future__ import annotations
