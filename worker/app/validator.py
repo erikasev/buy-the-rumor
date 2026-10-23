@@ -6,13 +6,44 @@ Each rule returns a Violation with a stable `rule` name so tests and error
 messages can refer to it.
 """
 
+import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from app.brief import BriefFrontmatter
+from app.brief import BriefFrontmatter, Constraints, UserRules
 
 MAX_VALIDITY = timedelta(hours=24)
 ALLOCATION_TOLERANCE = 1e-6  # floats like 33.3 + 33.3 + 33.4
+
+# The loosest constraints any brief may carry (design.md: $100 test budget, 25% per
+# position, limit orders only, 8% stop-loss). A brief's own `constraints` block may be
+# stricter, never looser, so an LLM can't relax the rules by rewriting them.
+HARD_LIMITS = Constraints(
+    max_total_usd=100,
+    max_position_pct=25,
+    allowed_order_types=["limit"],
+    stop_loss_pct=8,
+)
+
+# ADR-0001: nothing users receive may name a source. Catches URLs, x.com, and @handles
+# (but not email-like text such as a@b).
+_SOURCE_LEAK = re.compile(r"https?://|\bx\.com\b|(?<![\w.])@[A-Za-z0-9_]{2,15}\b")
+
+# An idea can describe a different instrument than its label ("etf on SPY: buy puts" is an
+# option trade). These catch the clear cases so a mislabel can't slip past the user's rules.
+_IMPLIED_INSTRUMENTS = {
+    "option": re.compile(r"\b(puts?|calls|call options?|options?|straddles?|strangles?|collars?)\b", re.I),
+    "future": re.compile(r"\bfutures?\b", re.I),
+}
+
+CITATION = re.compile(r"\[([A-Z]+\d+)\]")
+# Any citation-like marker, including ranges and lists such as [X1-X5] or [X1, X2].
+_MARKER = re.compile(r"[ \t]*\[[A-Z]+\d+(?:\s*[-\u2013,]\s*[A-Z]*\d+)*\]")
+
+
+def strip_citations(text: str) -> str:
+    """Remove citation markers. Sources stay internal (ADR-0001), so users never see them."""
+    return _MARKER.sub("", text).strip()
 
 
 @dataclass(frozen=True)
@@ -21,10 +52,40 @@ class Violation:
     message: str
 
 
+def effective_limits(rules: UserRules | None) -> Constraints:
+    """The hard limits, tightened by any numeric limit the user stated. Never looser."""
+    h = HARD_LIMITS
+    if rules is None:
+        return h
+    return Constraints(
+        max_total_usd=min(h.max_total_usd, rules.max_total_usd or h.max_total_usd),
+        max_position_pct=min(h.max_position_pct, rules.max_position_pct or h.max_position_pct),
+        allowed_order_types=h.allowed_order_types,
+        stop_loss_pct=min(h.stop_loss_pct, rules.stop_loss_pct or h.stop_loss_pct),
+    )
+
+
 def validate_brief(fm: BriefFrontmatter, now: datetime) -> list[Violation]:
     """Return every violation found. An empty list means the brief is valid."""
     v: list[Violation] = []
     c = fm.constraints
+    h = effective_limits(fm.user_rules)
+
+    # The brief's own limits must sit inside the hard limits and the user's rules
+    if c.max_total_usd > h.max_total_usd:
+        v.append(Violation("budget_too_high", f"The budget may be at most ${h.max_total_usd:g}."))
+    if c.max_position_pct > h.max_position_pct:
+        v.append(
+            Violation(
+                "position_limit_too_high", f"The per-position limit may be at most {h.max_position_pct:g}%."
+            )
+        )
+    if not set(c.allowed_order_types) <= set(h.allowed_order_types):
+        v.append(
+            Violation("order_types_too_loose", f"Only {', '.join(h.allowed_order_types)} orders are allowed.")
+        )
+    if c.stop_loss_pct > h.stop_loss_pct:
+        v.append(Violation("stop_loss_too_wide", f"The stop-loss may be at most {h.stop_loss_pct:g}%."))
 
     # Time window
     if fm.expires_at <= fm.generated_at:
@@ -67,9 +128,64 @@ def validate_brief(fm: BriefFrontmatter, now: datetime) -> list[Violation]:
                 )
             )
 
+    # Research leads: unique ids, and only instruments the user's rules allow
+    lead_ids = [lead.id for lead in fm.leads]
+    if len(set(lead_ids)) != len(lead_ids):
+        v.append(Violation("duplicate_lead", "Each lead needs its own id."))
+    rules = fm.user_rules or UserRules()
+    for lead in fm.leads:
+        for e in lead.expressions:
+            for implied, pattern in _IMPLIED_INSTRUMENTS.items():
+                if implied != e.instrument and pattern.search(e.idea) and not rules.allows(implied):
+                    v.append(
+                        Violation(
+                            "instrument_not_allowed",
+                            f"{lead.id} describes a {implied} trade on {e.underlying}, "
+                            "which the user's rules don't allow.",
+                        )
+                    )
+            if not rules.allows(e.instrument):
+                v.append(
+                    Violation(
+                        "instrument_not_allowed",
+                        f"{lead.id} suggests a {e.instrument} on {e.underlying}, "
+                        "which the user's rules don't allow.",
+                    )
+                )
+
     # Totals
     total = sum(p.allocation_pct for p in fm.positions if p.action == "buy")
     if total > 100 + ALLOCATION_TOLERANCE:
         v.append(Violation("total_allocation", f"Buy allocations sum to {total:g}%, above 100%."))
 
     return v
+
+
+def validate_citations(body: str, source_ids: set[str], require: bool = True) -> list[Violation]:
+    """Every [ID] cited in the body must be a source we collected. With `require` (any brief
+    that trades), there must be at least one. Ranges like [X1-X5] don't count as citations."""
+    cited = set(CITATION.findall(body))
+    if not cited and require:
+        return [
+            Violation(
+                "no_citations", "Every trade must be backed by a cited source, written like [X3] (no ranges)."
+            )
+        ]
+    unknown = sorted(cited - source_ids)
+    if unknown:
+        return [
+            Violation("unknown_source", f"The brief cites sources that do not exist: {', '.join(unknown)}.")
+        ]
+    return []
+
+
+def validate_public_text(texts: list[str]) -> list[Violation]:
+    """Text users receive must not name a source: no URLs, x.com, or @handles (ADR-0001)."""
+    for text in texts:
+        if _SOURCE_LEAK.search(text):
+            return [
+                Violation(
+                    "source_named", "The brief must not name accounts, handles or links; describe the signal."
+                )
+            ]
+    return []

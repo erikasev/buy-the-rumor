@@ -1,0 +1,70 @@
+version: "1.0"
+project_name: "agent"
+environment: "development" # "development" (testnet/sandbox) | "production"
+
+# ---------------------------------------------------------
+# LLM Orchestrator Configuration
+# ---------------------------------------------------------
+agent:
+  provider: "openrouter" # all LLM calls go through OpenRouter (OPENROUTER_API_KEY)
+  base_url: "https://openrouter.ai/api/v1"
+  models: # OpenRouter model IDs (<vendor>/<model>)
+    cheap: "openai/gpt-4o-mini" # theme mapping: picks X accounts
+    strong: "openai/gpt-4o" # strategist: positions and thesis
+  temperature: 0.1 # Low temperature for disciplined, deterministic trade evaluation
+  timeout_seconds: 60 # per LLM call; the SDK retries twice with backoff
+  max_output_tokens: 2500
+  max_iterations: 10 # Safety limit on reasoning loop steps per turn
+  system_instructions: |
+    You are a risk-averse execution agent. Always verify guardrails
+    before requesting quote generation or signing a transaction.
+
+# ---------------------------------------------------------
+# Worker pipeline
+# ---------------------------------------------------------
+worker:
+  top_accounts: 5 # accounts the LLM picks per theme
+  tweet_lookback_days: 3 # how far back to scrape X
+  max_tweets_per_account: 10 # per account, both when scraping and when reading the cache
+  max_sources: 60 # posts sent to the strategist, newest first (bounds cost)
+  data_max_age_hours: 6 # a collected-data/ batch older than this is ignored; X is scraped instead
+  brief_validity_hours: 6 # expires_at = generated_at + this (hard cap 24)
+
+# ---------------------------------------------------------
+# Twitter Accounts
+# ---------------------------------------------------------
+twitter:
+  # Accounts to Track
+  accounts:
+    - '@JulianKlymochko'
+    - '@AlderLaneEggs'
+    - '@FedGuy12'
+    - '@agnostoxxx'
+    - '@Ed_Fin'
+    - '@TankerTrackers'
+    - '@BurggrabenH'
+    - '@LSREnergy'
+    - '@davereeth'
+    - '@dampedspring'
+    - '@crossbordercap'
+    - '@BobEUnlimited'
+    - '@DiMartinoBooth'
+    - '@MacroAlf'
+    - '@LynAldenContact'
+    - '@LukeGromen'
+    - '@JeffSnider_EDU'
+    - '@cangsizhi'
+    - '@blondesnmoney'
+    - '@hkuppy'
+    - '@AndyBiotech'
+    - '@lookonchain'
+    - '@JuneGoh_Sparta'
+
+# ---------------------------------------------------------
+# AWS (env vars BRIEFS_BUCKET_NAME, JOBS_TABLE_NAME, JOBS_QUEUE_URL, AWS_REGION override these)
+# ---------------------------------------------------------
+region: "us-east-2"
+bucket_name: "hackathon-btr-351611731335-us-east-2-an"
+dynamodb: "arn:aws:dynamodb:us-east-2:351611731335:table/buy-the-rumor"
+sqs: "https://sqs.us-east-2.amazonaws.com/351611731335/erika-sqs"
+

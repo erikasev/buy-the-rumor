@@ -1,10 +1,12 @@
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 
 from app.brief import BriefFormatError, parse_brief
-from app.validator import validate_brief
+from app.validator import validate_brief, validate_citations
+
+UTC = timezone.utc
 
 VALID_BRIEF = (Path(__file__).parent / "fixtures" / "brief.valid.md").read_text()
 NOW = datetime(2026, 10, 21, 14, 0, tzinfo=UTC)  # inside the fixture's validity window
@@ -65,9 +67,8 @@ def test_expired_brief_is_rejected():
 def test_total_allocation_over_100_is_rejected():
     fm, _ = parse_brief(VALID_BRIEF)
     data = fm.model_dump()
-    data["constraints"]["max_position_pct"] = 100
-    data["positions"][0]["allocation_pct"] = 60
-    data["positions"].append({**data["positions"][0], "asset": "ASSET-C-USD", "allocation_pct": 50})
+    buy = {**data["positions"][0], "allocation_pct": 25}
+    data["positions"] = [{**buy, "asset": f"ASSET-{c}-USD"} for c in "VWXYZ"]  # 5 x 25% = 125%
     fm = type(fm).model_validate(data)
     assert rules(validate_brief(fm, NOW)) == {"total_allocation"}
 
@@ -86,3 +87,158 @@ def test_total_allocation_over_100_is_rejected():
 def test_malformed_briefs_raise_format_error(text):
     with pytest.raises(BriefFormatError):
         parse_brief(text)
+
+
+@pytest.mark.parametrize(
+    "changes,rule",
+    [
+        ({"constraints__max_total_usd": 1000}, "budget_too_high"),
+        ({"constraints__max_position_pct": 100}, "position_limit_too_high"),
+        ({"constraints__allowed_order_types": ["limit", "market"]}, "order_types_too_loose"),
+        ({"constraints__stop_loss_pct": 30}, "stop_loss_too_wide"),
+    ],
+)
+def test_brief_cannot_loosen_hard_limits(changes, rule):
+    _, violations = brief_with(**changes)
+    assert rule in rules(violations)
+
+
+def test_market_order_fails_even_when_brief_allows_it():
+    _, violations = brief_with(
+        constraints__allowed_order_types=["limit", "market"], positions__0__order_type="market"
+    )
+    assert "order_types_too_loose" in rules(violations)
+
+
+def test_stricter_constraints_are_fine():
+    _, violations = brief_with(constraints__max_total_usd=50, constraints__max_position_pct=20)
+    assert violations == []
+
+
+@pytest.mark.parametrize(
+    "body,sources,rule",
+    [
+        ("No citations at all.", {"X1"}, "no_citations"),
+        ("Cites [X1] and [X9].", {"X1", "X2"}, "unknown_source"),
+        ("A range [X1-X2] is not a citation.", {"X1", "X2"}, "no_citations"),
+    ],
+)
+def test_citation_rules(body, sources, rule):
+    assert rules(validate_citations(body, sources)) == {rule}
+
+
+def test_valid_citations_pass():
+    assert validate_citations("Up [X1][X2], down [X2].", {"X1", "X2", "X3"}) == []
+
+
+def test_hold_only_brief_may_skip_citations():
+    assert validate_citations("Nothing relevant; holding.", {"X1"}, require=False) == []
+    assert rules(validate_citations("Bad [X9].", {"X1"}, require=False)) == {"unknown_source"}
+
+
+def _with_leads(rules=None, leads=None):
+    from app.brief import Lead, UserRules
+
+    fm, _ = parse_brief(VALID_BRIEF)
+    data = fm.model_dump()
+    data["user_rules"] = (rules or UserRules()).model_dump()
+    data["leads"] = leads or [
+        Lead(
+            id="L1",
+            signal="s",
+            hypothesis="h",
+            research=["r"],
+            expressions=[{"instrument": "option", "underlying": "KRE", "idea": "puts"}],
+            horizon="weeks",
+            conviction="low",
+            invalidation="i",
+        ).model_dump()
+    ]
+    return type(fm).model_validate(data)
+
+
+def test_effective_limits_take_the_tighter_value():
+    from app.brief import UserRules
+    from app.validator import effective_limits
+
+    limits = effective_limits(UserRules(max_total_usd=40, max_position_pct=90, stop_loss_pct=5))
+    assert (limits.max_total_usd, limits.max_position_pct, limits.stop_loss_pct) == (40, 25, 5)
+
+
+def test_constraints_looser_than_user_rules_fail():
+    from app.brief import UserRules
+
+    fm = _with_leads(rules=UserRules(max_position_pct=10))  # fixture constraints say 25%
+    assert "position_limit_too_high" in rules(validate_brief(fm, NOW))
+
+
+@pytest.mark.parametrize(
+    "user_rules,ok",
+    [
+        ({}, True),
+        ({"allowed_instruments": ["option"]}, True),
+        ({"allowed_instruments": ["stock"]}, False),
+        ({"excluded_instruments": ["option"]}, False),
+    ],
+)
+def test_lead_instruments_follow_user_rules(user_rules, ok):
+    from app.brief import UserRules
+
+    found = rules(validate_brief(_with_leads(rules=UserRules(**user_rules)), NOW))
+    assert ("instrument_not_allowed" not in found) is ok
+
+
+def test_duplicate_lead_ids_fail():
+    fm = _with_leads()
+    lead = fm.leads[0].model_dump()
+    fm = _with_leads(leads=[lead, lead])
+    assert "duplicate_lead" in rules(validate_brief(fm, NOW))
+
+
+@pytest.mark.parametrize(
+    "text,leaks",
+    [
+        ("A trader @FedGuy12 notes repo stress.", True),
+        ("Details at https://example.com/post", True),
+        ("Posted on x.com yesterday.", True),
+        ("Email ops@company.com about it.", False),
+        ("CDS spreads widened 40bp.", False),
+    ],
+)
+def test_public_text_must_not_name_sources(text, leaks):
+    from app.validator import validate_public_text
+
+    assert bool(validate_public_text([text])) is leaks
+
+
+@pytest.mark.parametrize(
+    "instrument,idea,user_rules,ok",
+    [
+        ("etf", "Hedge with puts if recession fears grow.", {"excluded_instruments": ["option"]}, False),
+        ("etf", "Hedge with puts if recession fears grow.", {"allowed_instruments": ["etf", "option"]}, True),
+        ("stock", "Buy calls into earnings.", {"allowed_instruments": ["stock"]}, False),
+        ("etf", "Go long via index futures.", {"excluded_instruments": ["future"]}, False),
+        (
+            "stock",
+            "Buy after the earnings call if guidance holds.",
+            {"excluded_instruments": ["option"]},
+            True,
+        ),
+        ("etf", "Underweight vs the index.", {"excluded_instruments": ["option", "future"]}, True),
+    ],
+)
+def test_mislabeled_instrument_cannot_dodge_user_rules(instrument, idea, user_rules, ok):
+    from app.brief import Lead, UserRules
+
+    lead = Lead(
+        id="L1",
+        signal="s",
+        hypothesis="h",
+        research=["r"],
+        horizon="weeks",
+        conviction="low",
+        invalidation="i",
+        expressions=[{"instrument": instrument, "underlying": "SPY", "idea": idea}],
+    )
+    fm = _with_leads(rules=UserRules(**user_rules), leads=[lead.model_dump()])
+    assert ("instrument_not_allowed" not in rules(validate_brief(fm, NOW))) is ok

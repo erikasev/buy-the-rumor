@@ -22,10 +22,11 @@ This contract defines everything that crosses a boundary between the web service
 | `JOBS_QUEUE_URL` | web | SQS queue URL to send jobs to |
 | `JOBS_TABLE_NAME` | web, worker | DynamoDB table name |
 | `BRIEFS_BUCKET_NAME` | web, worker | S3 bucket for briefs and evidence |
-| `OPENROUTER_SECRET_ARN` | worker | Secrets Manager ARN holding the OpenRouter API key |
+| `OPENROUTER_API_KEY` | worker | OpenRouter API key (Lambda environment variable; secret) |
+| `TWITTER_BEARER_TOKEN` | worker | X API v2 bearer token (Lambda environment variable; secret) |
 | `AWS_REGION` | web, worker | Region of all resources |
 
-No other configuration crosses the boundary. Local development sets the same names in an untracked `.env` file.
+No other configuration crosses the boundary. Local development sets the same names in an untracked `.env.local` file at the repo root; the worker never reads it inside Lambda. When a table, bucket, or queue variable is unset, the worker falls back to `settings.yaml` (`dynamodb`, `bucket_name`, `sqs`, `region`).
 
 ## SQS message
 
@@ -45,7 +46,7 @@ Sent by the web service, consumed by the worker. The message carries only what t
 | --- | --- | --- | --- |
 | `schema_version` | integer | yes | Always `1` |
 | `job_id` | string | yes | Same ID as the DynamoDB record |
-| `theme` | string | yes | 1 to 100 characters, trimmed by the web service |
+| `theme` | string | yes | 1 to 1000 characters, trimmed by the web service |
 | `risk_level` | integer | no | 0 (cautious) to 100 (bold), from the risk slider. Readers default to 50 when absent. Added after v1 was first merged (additive). |
 | `requested_at` | string | yes | When the user submitted |
 
@@ -69,6 +70,8 @@ Partition key: `job_id`.
 
 Rule: after creating the record, the web service only reads it. Only the worker changes it.
 
+If the worker receives a message whose record does not exist (a job enqueued without the web service, e.g. by `worker/scripts/enqueue_job.py`), it creates the record from the message in the same conditional write that moves it to `RUNNING`.
+
 Note: `status` is a DynamoDB reserved word, so every expression that names it must use `ExpressionAttributeNames` (e.g. `#s` for `status`).
 
 ### Status state machine
@@ -84,7 +87,7 @@ stateDiagram-v2
     FAILED --> [*]
 ```
 
-Each transition is a conditional write that checks the current `status`. A transition that is not in this diagram must fail. On duplicate delivery, the worker sees a status other than `QUEUED`, skips the job, and deletes the message.
+Each transition is a conditional write that checks the current `status`. A transition that is not in this diagram must fail. On duplicate delivery, the worker sees a status other than `QUEUED`, skips the job, and deletes the message. The exception: if the record is still `RUNNING` and SQS reports the message was received before (`ApproximateReceiveCount` > 1), the previous attempt died mid-run (crash or Lambda timeout), so the worker moves it to `FAILED` with code `INTERNAL`.
 
 ### Stage values
 
@@ -132,6 +135,10 @@ The structured form of the brief, which the web page renders. It has the brief's
 | `risk_level` | integer | 0 to 100, as requested |
 | `thesis` | string | Plain text, may contain line breaks |
 | `risks` | string | Plain text: what could go wrong and what would change the plan |
+| `user_rules` | object, optional | The trading rules the user stated, read from their request; carried over unchanged (ADR-0002). Fields: `allowed_instruments`, `excluded_instruments` (instrument classes: `stock`, `etf`, `option`, `future`, `crypto`, `bond`, `fx`, `commodity`; empty means not restricted), `sectors`, `excluded_sectors`, `max_total_usd`, `max_position_pct`, `stop_loss_pct`, `trade_frequency`, `horizon` (null when not stated), `other` (any other rule, verbatim) |
+| `leads` | list, optional | Research leads (ADR-0002), at most 6. Each: `id` (`L1`...), `signal`, `hypothesis`, `research` (list of steps), `expressions` (list of `{instrument, underlying, idea}`), `horizon`, `conviction` (`low`/`medium`/`high`), `invalidation` |
+
+`thesis` holds the overview of the leads. `positions` may be an empty list: briefs are research leads, not trade orders. `constraints` is the fixed caps tightened by any number in `user_rules`, never looser. `user_rules` and `leads` were added after v1 was first merged (additive); older briefs don't have them.
 
 It never contains sources or citation markers (ADR-0001). The worker writes it after the brief passes validation, from the same data as the `.md`. If it is missing or unreadable, the web page falls back to showing the raw `.md`. Example: `contracts/fixtures/brief_view.json`.
 
