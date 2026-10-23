@@ -31,8 +31,8 @@ logger = logging.getLogger(__name__)
 T = TypeVar("T", bound=BaseModel)
 
 DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
-DEFAULT_CHEAP_MODEL = "openai/gpt-4o-mini"
-DEFAULT_STRONG_MODEL = "openai/gpt-4o"
+DEFAULT_CHEAP_MODEL = "google/gemini-2.5-flash-lite"
+DEFAULT_STRONG_MODEL = "google/gemini-2.5-flash"
 MAX_ATTEMPTS = 2  # design.md: malformed output gets one retry, then the job fails
 
 # Known specializations to guide the account selector
@@ -107,7 +107,17 @@ class LLMAgent:
         self.cheap_model = setting(settings, "agent.models.cheap", DEFAULT_CHEAP_MODEL)
         self.strong_model = setting(settings, "agent.models.strong", DEFAULT_STRONG_MODEL)
         self.temperature = float(setting(settings, "agent.temperature", 0.1))
-        self.max_output_tokens = int(setting(settings, "agent.max_output_tokens", 2500))
+        self.max_output_tokens = int(setting(settings, "agent.max_output_tokens", 4000))
+        # Thinking models bill hidden reasoning as output, and it counts against max_output_tokens.
+        # A cap keeps cost bounded and leaves room for the JSON answer. None: provider default.
+        # OpenRouter tries these in order when a model is rate-limited or down.
+        fallbacks = setting(settings, "agent.fallback_models", {})
+        self.fallbacks = {
+            self.cheap_model: list(fallbacks.get("cheap", [])),
+            self.strong_model: list(fallbacks.get("strong", [])),
+        }
+        budget = setting(settings, "agent.reasoning_max_tokens", None)
+        self.reasoning_max_tokens = None if budget is None else int(budget)
         if client:
             self.client = client
         else:
@@ -119,10 +129,19 @@ class LLMAgent:
                 max_retries=2,  # design.md: two retries with backoff on OpenRouter errors
             )
 
-    def _complete(self, stage: str, model: str, messages: list[dict[str, str]], json_mode: bool) -> str:
+    def _complete(
+        self, stage: str, model: str, messages: list[dict[str, str]], json_mode: bool, reasoning: bool = False
+    ) -> str:
         kwargs: dict[str, Any] = {}
         if json_mode:
             kwargs["response_format"] = {"type": "json_object"}
+        extra_body: dict[str, Any] = {}
+        if reasoning and self.reasoning_max_tokens is not None:
+            extra_body["reasoning"] = {"max_tokens": self.reasoning_max_tokens}
+        if self.fallbacks.get(model):
+            extra_body["models"] = [model, *self.fallbacks[model]]
+        if extra_body:
+            kwargs["extra_body"] = extra_body
         try:
             resp = self.client.chat.completions.create(
                 model=model,
@@ -142,8 +161,13 @@ class LLMAgent:
                         "event": "llm_usage",
                         "stage": stage,
                         "model": model,
+                        "served_by": getattr(resp, "model", None),  # differs from model on a fallback
                         "prompt_tokens": getattr(usage, "prompt_tokens", None),
                         "completion_tokens": getattr(usage, "completion_tokens", None),
+                        "reasoning_tokens": getattr(
+                            getattr(usage, "completion_tokens_details", None), "reasoning_tokens", None
+                        ),
+                        "finish_reason": getattr(resp.choices[0], "finish_reason", None),
                     },
                     default=str,
                 )
@@ -193,7 +217,7 @@ class LLMAgent:
         problems: list[str] = []
         malformed = False
         for attempt in range(1, MAX_ATTEMPTS + 1):
-            raw = self._complete(stage, model, messages, json_mode=True)
+            raw = self._complete(stage, model, messages, json_mode=True, reasoning=stage == "strategy")
             try:
                 answer = schema.model_validate_json(_strip_fences(raw))
             except ValidationError as exc:
@@ -234,11 +258,14 @@ class LLMAgent:
         user = (
             f"<user_request>\n{json.dumps(theme)}\n</user_request>\n\n"
             "Instrument classes: stock, etf, option, future, crypto, bond, fx, commodity.\n"
-            "- allowed_instruments: classes the user limits themselves to (empty if they didn't limit).\n"
+            "- allowed_instruments: only if the user explicitly limits the instruments they trade "
+            "(e.g. 'only stocks and options'). Sectors and themes never imply instruments: 'energy and "
+            "shipping' is a sector, so allowed_instruments stays empty.\n"
             "- excluded_instruments: classes the user rules out (e.g. 'no options', 'no leverage' rules out "
             "option and future).\n"
             "- sectors / excluded_sectors: sectors or themes they want or rule out.\n"
-            "- max_total_usd, max_position_pct, stop_loss_pct: numbers only if stated.\n"
+            "- max_total_usd, max_position_pct, stop_loss_pct: numbers only if stated. Percentages are "
+            "numbers from 0 to 100, not fractions: '10% per position' is max_position_pct 10, not 0.1.\n"
             "- trade_frequency, horizon: as stated, short.\n"
             "- other: any other rule, quoted as briefly as possible.\n\n"
             "Respond with only this JSON object:\n"

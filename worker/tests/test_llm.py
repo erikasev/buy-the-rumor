@@ -151,6 +151,13 @@ def test_strategist_prompt_frames_posts_as_leads_and_hides_authors():
     assert "On-chain smart money" in messages[1]["content"]
 
 
+def test_repo_settings_have_fallbacks():
+    from app.config import load_settings
+
+    fb = load_settings()["agent"]["fallback_models"]
+    assert fb["cheap"] and fb["strong"]
+
+
 def test_extract_rules_uses_cheap_model():
     client = client_returning(json.dumps(RULES))
     rules = agent(client).extract_rules("Crypto only, no options, max 10% per position")
@@ -164,3 +171,40 @@ def test_extract_rules_retries_then_fails_on_garbage():
     with pytest.raises(JobFailure) as exc:
         agent(client).extract_rules("whatever")
     assert (exc.value.error.stage, exc.value.error.code) == ("theme_mapping", "LLM_INVALID_OUTPUT")
+
+
+def test_reasoning_cap_applies_to_strategist_only():
+    client = client_returning(json.dumps(RULES), json.dumps(DRAFT))
+    a = LLMAgent(client=client, settings={"agent": {"reasoning_max_tokens": 512}})
+    a.extract_rules("crypto only")
+    a.draft_strategy("AI", SOURCES, HARD_LIMITS, check=lambda d: [])
+    rules_call, strategy_call = client.chat.completions.create.call_args_list
+    assert "extra_body" not in rules_call.kwargs
+    assert strategy_call.kwargs["extra_body"] == {"reasoning": {"max_tokens": 512}}
+
+
+def test_fallback_models_are_sent_per_tier():
+    client = client_returning(json.dumps(RULES), json.dumps(DRAFT))
+    settings = {
+        "agent": {
+            "models": {"cheap": "g/lite", "strong": "g/flash"},
+            "fallback_models": {"cheap": ["o/mini"], "strong": ["o/4o"]},
+        }
+    }
+    a = LLMAgent(client=client, settings=settings)
+    a.extract_rules("x")
+    a.draft_strategy("AI", SOURCES, HARD_LIMITS, check=lambda d: [])
+    rules_call, strategy_call = client.chat.completions.create.call_args_list
+    assert rules_call.kwargs["extra_body"] == {"models": ["g/lite", "o/mini"]}
+    assert strategy_call.kwargs["extra_body"]["models"] == ["g/flash", "o/4o"]
+
+
+def test_no_reasoning_option_when_unset():
+    client = client_returning(json.dumps(DRAFT))
+    agent(client).draft_strategy("AI", SOURCES, HARD_LIMITS, check=lambda d: [])
+    assert "extra_body" not in client.chat.completions.create.call_args.kwargs
+
+
+def test_defaults_are_gemini_via_openrouter():
+    a = LLMAgent(client=MagicMock(), settings={})
+    assert (a.cheap_model, a.strong_model) == ("google/gemini-2.5-flash-lite", "google/gemini-2.5-flash")

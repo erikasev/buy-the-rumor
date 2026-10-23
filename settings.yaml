@@ -9,11 +9,15 @@ agent:
   provider: "openrouter" # all LLM calls go through OpenRouter (OPENROUTER_API_KEY)
   base_url: "https://openrouter.ai/api/v1"
   models: # OpenRouter model IDs (<vendor>/<model>)
-    cheap: "openai/gpt-4o-mini" # theme mapping: picks X accounts
-    strong: "openai/gpt-4o" # strategist: positions and thesis
+    cheap: "google/gemini-2.5-flash-lite" # theme mapping: reads the user's rules, picks X accounts
+    strong: "google/gemini-2.5-flash" # strategist: research leads, overview and risks
   temperature: 0.1 # Low temperature for disciplined, deterministic trade evaluation
   timeout_seconds: 60 # per LLM call; the SDK retries twice with backoff
-  max_output_tokens: 2500
+  max_output_tokens: 4000 # per call; on thinking models this includes reasoning tokens
+  reasoning_max_tokens: 1024 # strategist only: cap on hidden reasoning (billed as output); 0 turns it off
+  fallback_models: # OpenRouter switches to these, in order, when a model is rate-limited or down
+    cheap: ["openai/gpt-4o-mini"]
+    strong: ["openai/gpt-4o"]
   max_iterations: 10 # Safety limit on reasoning loop steps per turn
   system_instructions: |
     You are a risk-averse execution agent. Always verify guardrails
