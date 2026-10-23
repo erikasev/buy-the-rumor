@@ -118,9 +118,9 @@ def test_stricter_constraints_are_fine():
 @pytest.mark.parametrize(
     "body,sources,rule",
     [
-        ("No citations at all.", {"X1"}, "no_citations"),
-        ("Cites [X1] and [X9].", {"X1", "X2"}, "unknown_source"),
-        ("A range [X1-X2] is not a citation.", {"X1", "X2"}, "no_citations"),
+        ("No citations at all.", {"S1"}, "no_citations"),
+        ("Cites [S1] and [S9].", {"S1", "S2"}, "unknown_source"),
+        ("A range [S1-S2] is not a citation.", {"S1", "S2"}, "no_citations"),
     ],
 )
 def test_citation_rules(body, sources, rule):
@@ -128,12 +128,12 @@ def test_citation_rules(body, sources, rule):
 
 
 def test_valid_citations_pass():
-    assert validate_citations("Up [X1][X2], down [X2].", {"X1", "X2", "X3"}) == []
+    assert validate_citations("Up [S1][S2], down [S2].", {"S1", "S2", "S3"}) == []
 
 
 def test_hold_only_brief_may_skip_citations():
-    assert validate_citations("Nothing relevant; holding.", {"X1"}, require=False) == []
-    assert rules(validate_citations("Bad [X9].", {"X1"}, require=False)) == {"unknown_source"}
+    assert validate_citations("Nothing relevant; holding.", {"S1"}, require=False) == []
+    assert rules(validate_citations("Bad [S9].", {"S1"}, require=False)) == {"unknown_source"}
 
 
 def _with_leads(rules=None, leads=None):
@@ -198,9 +198,9 @@ def test_duplicate_lead_ids_fail():
 @pytest.mark.parametrize(
     "text,leaks",
     [
-        ("A trader @FedGuy12 notes repo stress.", True),
+        ("A trader @repo_desk notes repo stress.", True),
         ("Details at https://example.com/post", True),
-        ("Posted on x.com yesterday.", True),
+        ("Posted on posts.example yesterday.", True),
         ("Email ops@company.com about it.", False),
         ("CDS spreads widened 40bp.", False),
     ],
@@ -208,7 +208,7 @@ def test_duplicate_lead_ids_fail():
 def test_public_text_must_not_name_sources(text, leaks):
     from app.validator import validate_public_text
 
-    assert bool(validate_public_text([text])) is leaks
+    assert bool(validate_public_text([text], hosts=("posts.example",))) is leaks
 
 
 @pytest.mark.parametrize(

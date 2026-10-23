@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "base_url": "https://api.posts.example/v1",
+  "post_url": "https://posts.example/{username}/p/{id}",
+  "lookup": {
+    "path": "accounts/lookup",
+    "names_param": "handles",
+    "params": {
+      "fields": "id,name,username"
+    }
+  },
+  "timeline": {
+    "path": "accounts/{account_id}/posts",
+    "since_param": "since",
+    "limit_param": "limit",
+    "params": {
+      "post_fields": "created_at,text"
+    }
+  },
+  "fields": {
+    "references": "refs",
+    "included_posts": "posts",
+    "included_accounts": "accounts",
+    "metrics": "stats",
+    "quote": "quote",
+    "repost": "repost"
+  }
+}

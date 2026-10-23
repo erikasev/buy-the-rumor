@@ -39,7 +39,7 @@ def main():
                 print("\n[NOTICE] Batches found, but none are fresh (<24h). Need new scrape.")
         else:
             print("\n[NOTICE] No collected-data batches found in S3 yet.")
-            print("The worker will need to collect tweets from X.com.")
+            print("The worker will collect fresh posts on its next job.")
 
     except Exception as e:
         print(f"\n[ERROR] Failed to check S3: {e}", file=sys.stderr)

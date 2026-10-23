@@ -8,7 +8,7 @@
 
 ## Context
 
-The first pipeline treated posts from market commentators as the basis for direct positions: it read tweets and wrote Coinbase spot buys and holds. But a post is one person's observation or opinion, often unverified. Acting on it directly turns chatter into trades.
+The first pipeline treated posts from market commentators as the basis for direct positions: it read posts and wrote Coinbase spot buys and holds. But a post is one person's observation or opinion, often unverified. Acting on it directly turns chatter into trades.
 
 What makes the posts valuable is what they point at. A commentator noting that CDS prices imply higher default rates is a lead: research the exposed companies, and if the user trades options, consider puts. The research and the decision belong to the agent that acts on the brief, using real data.
 

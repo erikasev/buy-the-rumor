@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run the pipeline locally on one theme, the same code path Lambda uses.
 
-Uses the S3 cache under collected-data/ and scrapes X for gaps. Secrets come from the
+Uses the S3 cache under collected-data/ and collects fresh posts for gaps. Secrets come from the
 environment or .env.local. By default the brief is printed and uploaded to S3, but no
 DynamoDB record is written; pass --with-dynamodb to run the full Lambda flow.
 """

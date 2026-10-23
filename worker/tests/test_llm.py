@@ -13,8 +13,8 @@ DRAFT = {
     "leads": [
         {
             "id": "L1",
-            "signal": "Whale wallets moved BTC to exchanges [X1].",
-            "hypothesis": "Possible distribution ahead [X1].",
+            "signal": "Whale wallets moved BTC to exchanges [S1].",
+            "hypothesis": "Possible distribution ahead [S1].",
             "research": ["Check exchange net inflows over 7 days."],
             "expressions": [{"instrument": "crypto", "underlying": "BTC", "idea": "Watch for a breakdown."}],
             "horizon": "days",
@@ -22,12 +22,12 @@ DRAFT = {
             "invalidation": "Inflows reverse.",
         }
     ],
-    "thesis": "On-chain flows hint at selling [X1].",
-    "risks": "Single source [X1].",
+    "thesis": "On-chain flows hint at selling [S1].",
+    "risks": "Single source [S1].",
 }
 RULES = {"allowed_instruments": ["crypto"], "excluded_instruments": ["option"], "max_position_pct": 10}
 SOURCES = [
-    {"source_id": "X1", "author_username": "lookonchain", "text": "BTC inflow", "created_at": "2026-10-21"}
+    {"source_id": "S1", "author_username": "whale_watch", "text": "BTC inflow", "created_at": "2026-10-21"}
 ]
 
 
@@ -58,16 +58,16 @@ def test_get_llm_api_key_missing(monkeypatch):
 
 
 def test_select_top_accounts_uses_cheap_model_and_parses_json():
-    client = client_returning('{"accounts": ["@lookonchain", "@dylan522p", "@notInList", "@FedGuy12"]}')
-    accounts = ["@JulianKlymochko", "@lookonchain", "@dylan522p", "@FedGuy12"]
+    client = client_returning('{"accounts": ["@whale_watch", "@chip_notes", "@notInList", "@repo_desk"]}')
+    accounts = ["@spac_arb", "@whale_watch", "@chip_notes", "@repo_desk"]
     top = agent(client).select_top_accounts(theme="Bitcoin on-chain", accounts=accounts, top_n=3)
-    assert top == ["@lookonchain", "@dylan522p", "@FedGuy12"]
+    assert top == ["@whale_watch", "@chip_notes", "@repo_desk"]
     assert client.chat.completions.create.call_args.kwargs["model"] == "c/cheap"
 
 
 def test_select_top_accounts_accepts_bare_list():
-    client = client_returning('```json\n["@lookonchain"]\n```')
-    assert agent(client).select_top_accounts("x", ["@a", "@lookonchain"], top_n=2) == ["@lookonchain"]
+    client = client_returning('```json\n["@whale_watch"]\n```')
+    assert agent(client).select_top_accounts("x", ["@a", "@whale_watch"], top_n=2) == ["@whale_watch"]
 
 
 def test_select_top_accounts_fallback_on_error():
@@ -144,11 +144,28 @@ def test_risk_level_is_in_the_strategist_prompt():
 
 def test_strategist_prompt_frames_posts_as_leads_and_hides_authors():
     client = client_returning(json.dumps(DRAFT))
-    agent(client).draft_strategy("AI", SOURCES, HARD_LIMITS, check=lambda d: [])
+    focus = {"whale_watch": "On-chain smart money tracking"}
+    agent(client).draft_strategy("AI", SOURCES, HARD_LIMITS, check=lambda d: [], focus=focus)
     messages = client.chat.completions.create.call_args.kwargs["messages"]
     assert "never as advice" in messages[0]["content"]
-    assert "@lookonchain" not in messages[1]["content"]  # author handle replaced by its focus
-    assert "On-chain smart money" in messages[1]["content"]
+    assert "@whale_watch" not in messages[1]["content"]  # author handle replaced by its focus
+    assert "On-chain smart money tracking" in messages[1]["content"]
+
+
+def test_account_picker_sees_each_accounts_focus():
+    client = client_returning('{"accounts": ["@repo_desk"]}')
+    focus = {"repo_desk": "Repo markets and bank liquidity"}
+    agent(client).select_top_accounts("Bank stress", ["@whale_watch", "@repo_desk"], top_n=1, focus=focus)
+    prompt = client.chat.completions.create.call_args.kwargs["messages"][1]["content"]
+    assert "- @repo_desk: Repo markets and bank liquidity" in prompt
+    assert "- @whale_watch: Financial and market commentary" in prompt  # no description given
+
+
+def test_repo_settings_have_fallbacks():
+    from app.config import load_settings
+
+    fb = load_settings()["agent"]["fallback_models"]
+    assert fb["cheap"] and fb["strong"]
 
 
 def test_extract_rules_uses_cheap_model():
@@ -164,3 +181,40 @@ def test_extract_rules_retries_then_fails_on_garbage():
     with pytest.raises(JobFailure) as exc:
         agent(client).extract_rules("whatever")
     assert (exc.value.error.stage, exc.value.error.code) == ("theme_mapping", "LLM_INVALID_OUTPUT")
+
+
+def test_reasoning_cap_applies_to_strategist_only():
+    client = client_returning(json.dumps(RULES), json.dumps(DRAFT))
+    a = LLMAgent(client=client, settings={"agent": {"reasoning_max_tokens": 512}})
+    a.extract_rules("crypto only")
+    a.draft_strategy("AI", SOURCES, HARD_LIMITS, check=lambda d: [])
+    rules_call, strategy_call = client.chat.completions.create.call_args_list
+    assert "extra_body" not in rules_call.kwargs
+    assert strategy_call.kwargs["extra_body"] == {"reasoning": {"max_tokens": 512}}
+
+
+def test_fallback_models_are_sent_per_tier():
+    client = client_returning(json.dumps(RULES), json.dumps(DRAFT))
+    settings = {
+        "agent": {
+            "models": {"cheap": "g/lite", "strong": "g/flash"},
+            "fallback_models": {"cheap": ["o/mini"], "strong": ["o/4o"]},
+        }
+    }
+    a = LLMAgent(client=client, settings=settings)
+    a.extract_rules("x")
+    a.draft_strategy("AI", SOURCES, HARD_LIMITS, check=lambda d: [])
+    rules_call, strategy_call = client.chat.completions.create.call_args_list
+    assert rules_call.kwargs["extra_body"] == {"models": ["g/lite", "o/mini"]}
+    assert strategy_call.kwargs["extra_body"]["models"] == ["g/flash", "o/4o"]
+
+
+def test_no_reasoning_option_when_unset():
+    client = client_returning(json.dumps(DRAFT))
+    agent(client).draft_strategy("AI", SOURCES, HARD_LIMITS, check=lambda d: [])
+    assert "extra_body" not in client.chat.completions.create.call_args.kwargs
+
+
+def test_defaults_are_gemini_via_openrouter():
+    a = LLMAgent(client=MagicMock(), settings={})
+    assert (a.cheap_model, a.strong_model) == ("google/gemini-2.5-flash-lite", "google/gemini-2.5-flash")

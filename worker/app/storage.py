@@ -1,8 +1,7 @@
 """S3 storage and data collection retrieval.
 
-Handles reading and writing collected data to/from S3 with the prefix:
-`collected-data/{timestamp}/`
-as specified in AGENTS.md and settings.yaml.
+Handles reading and writing collected data to/from S3 under the prefix
+`collected-data/{timestamp}/`, in the bucket named by settings.yaml or BRIEFS_BUCKET_NAME.
 """
 
 from __future__ import annotations
@@ -161,8 +160,8 @@ class S3DataStorage:
         Returns a list of dicts:
         [
             {
-                "key": "collected-data/.../tweets.json",
-                "filename": "tweets.json",
+                "key": "collected-data/.../posts.json",
+                "filename": "posts.json",
                 "data": parsed_content,
                 "last_modified": datetime(...)
             }
@@ -205,7 +204,7 @@ class S3DataStorage:
         self,
         data: Any,
         timestamp: str | None = None,
-        filename: str = "tweets.json",
+        filename: str = "posts.json",
         prefix: str = DEFAULT_PREFIX,
     ) -> str:
         """Upload newly collected data to s3://{bucket}/{prefix}/{timestamp}/{filename}.
@@ -232,6 +231,10 @@ class S3DataStorage:
             content_type = "application/json"
 
         return self.put(key, body, content_type)
+
+    def get(self, key: str) -> bytes:
+        """Read one object. Raises botocore's ClientError if it is missing or unreadable."""
+        return self.s3_client.get_object(Bucket=self.bucket_name, Key=key)["Body"].read()
 
     def put(self, key: str, body: bytes, content_type: str) -> str:
         """Write one object and return its key."""

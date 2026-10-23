@@ -23,7 +23,7 @@ This contract defines everything that crosses a boundary between the web service
 | `JOBS_TABLE_NAME` | web, worker | DynamoDB table name |
 | `BRIEFS_BUCKET_NAME` | web, worker | S3 bucket for briefs and evidence |
 | `OPENROUTER_API_KEY` | worker | OpenRouter API key (Lambda environment variable; secret) |
-| `TWITTER_BEARER_TOKEN` | worker | X API v2 bearer token (Lambda environment variable; secret) |
+| `SOURCES_API_TOKEN` | worker | Token for the source API (Lambda environment variable; secret) |
 | `AWS_REGION` | web, worker | Region of all resources |
 
 No other configuration crosses the boundary. Local development sets the same names in an untracked `.env.local` file at the repo root; the worker never reads it inside Lambda. When a table, bucket, or queue variable is unset, the worker falls back to `settings.yaml` (`dynamodb`, `bucket_name`, `sqs`, `region`).

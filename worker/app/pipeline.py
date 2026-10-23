@@ -1,8 +1,8 @@
 """The agent pipeline: a theme in, a validated brief in S3 out.
 
 Stages, in contract order (stages not built yet are skipped):
-  theme_mapping  LLM reads the user's trading rules, then picks the X accounts that fit
-  collecting     fresh posts from the S3 cache (collected-data/), scraping X only for gaps
+  theme_mapping  LLM reads the user's trading rules, then picks the accounts that fit
+  collecting     fresh posts from the S3 cache (collected-data/), collecting only for gaps
   strategy       LLM turns the posts into cited research leads (JSON)
   validation     code renders the brief and enforces the user's rules, caps and citations
 
@@ -27,6 +27,7 @@ from typing import Any
 import yaml
 
 from app.brief import BriefFormatError, BriefView, Lead, UserRules, parse_brief
+from app.collector import CollectorConfig, PostCollector, SourceAPIError, load_collector_config
 from app.config import load_settings, setting
 from app.contract import (
     JobError,
@@ -40,8 +41,8 @@ from app.contract import (
 )
 from app.jobs import JobStore
 from app.llm import LLMAgent, StrategyDraft
+from app.sources import focus_by_handle, load_sources
 from app.storage import S3DataStorage
-from app.twitter import TwitterAPIError, TwitterCollector
 from app.validator import (
     effective_limits,
     strip_citations,
@@ -188,7 +189,7 @@ class Pipeline:
         storage: S3DataStorage,
         llm: LLMAgent,
         store: JobStore | None = None,
-        collector_factory: Callable[[], TwitterCollector] = TwitterCollector,
+        collector_factory: Callable[[CollectorConfig], PostCollector] = PostCollector,
         settings: dict[str, Any] | None = None,
         now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
     ):
@@ -258,14 +259,16 @@ class Pipeline:
         enter("theme_mapping")
         rules = self.llm.extract_rules(msg.theme)
         _log("rules_extracted", job_id=msg.job_id, rules=rules.model_dump(exclude_defaults=True))
-        accounts = setting(self.settings, "twitter.accounts", [])
-        if not accounts:
-            raise JobFailure("theme_mapping", "INTERNAL", "No sources are configured.")
-        selected = self.llm.select_top_accounts(msg.theme, accounts, top_n=int(self._cfg("top_accounts", 5)))
+        followed = load_sources(self.storage, self.settings)
+        focus = focus_by_handle(followed)
+        selected = self.llm.select_top_accounts(
+            msg.theme, [f.handle for f in followed], top_n=int(self._cfg("top_accounts", 5)), focus=focus
+        )
         _log("accounts_selected", job_id=msg.job_id, accounts=selected)
 
         enter("collecting")
-        sources = self.collect(selected)
+        collector_cfg = load_collector_config(self.storage, self.settings)
+        sources = self.collect(selected, collector_cfg)
         if not sources:
             raise JobFailure("collecting", "NO_DATA", "No recent posts were found from this theme's sources.")
         _log("collected", job_id=msg.job_id, sources=len(sources))
@@ -295,7 +298,7 @@ class Pipeline:
             found += validate_citations(everything, source_ids, require=False)
             # ADR-0001: what users get must not name accounts or links.
             public = [view.thesis, view.risks, *(t for lead in view.leads for t in _lead_text(lead))]
-            found += validate_public_text(public)
+            found += validate_public_text(public, hosts=(collector_cfg.post_host,))
             return [v.message for v in found]
 
         enter("strategy")
@@ -305,6 +308,7 @@ class Pipeline:
             effective_limits(rules),
             risk_level=msg.risk_level,
             rules=rules,
+            focus=focus,
             check=lambda d: violations(d, generated_at),
         )
 
@@ -322,29 +326,30 @@ class Pipeline:
         }
         return GeneratedBrief(markdown=markdown, view=view, evidence=evidence)
 
-    def collect(self, accounts: list[str]) -> list[dict[str, Any]]:
-        """Posts from `accounts`: the latest fresh S3 batch first, then X for accounts it lacks.
+    def collect(self, accounts: list[str], config: CollectorConfig | None = None) -> list[dict[str, Any]]:
+        """Posts from `accounts`: the latest fresh S3 batch first, then the source API for accounts
+        the batch lacks. `config` is the private collector config, loaded if needed.
 
-        Returns at most worker.max_sources posts, newest first, renumbered X1..Xn.
+        Returns at most worker.max_sources posts, newest first, renumbered S1..Sn.
         """
-        per_account = int(self._cfg("max_tweets_per_account", 10))
+        per_account = int(self._cfg("max_posts_per_account", 10))
         wanted = {_handle(a) for a in accounts}
         by_account: dict[str, dict[str, dict[str, Any]]] = {h: {} for h in wanted}
 
         def add(posts: list[dict[str, Any]], fetched_at: str | None) -> None:
             for t in posts:
                 h = _handle(t.get("author_username", ""))
-                if h in by_account and t.get("tweet_id"):
-                    by_account[h].setdefault(str(t["tweet_id"]), {**t, "fetched_at": fetched_at})
+                if h in by_account and t.get("post_id"):
+                    by_account[h].setdefault(str(t["post_id"]), {**t, "fetched_at": fetched_at})
 
         covered: set[str] = set()
         batch = self.storage.get_latest_batch(max_age_hours=float(self._cfg("data_max_age_hours", 6)))
         if batch:
             for f in self.storage.read_batch_files(batch["prefix"]):
                 data = f.get("data")
-                if not (isinstance(data, dict) and isinstance(data.get("tweets"), list)):
+                if not (isinstance(data, dict) and isinstance(data.get("posts"), list)):
                     continue
-                posts = data["tweets"]
+                posts = data["posts"]
                 listed = data.get("accounts") or [t.get("author_username", "") for t in posts]
                 covered |= {_handle(a) for a in listed}
                 add(posts, data.get("collected_at"))
@@ -353,26 +358,28 @@ class Pipeline:
         missing = [a for a in accounts if _handle(a) not in covered]
         if missing:
             try:
-                collector = self.collector_factory()
-                data = collector.collect_tweets(
-                    accounts=missing,
-                    days=int(self._cfg("tweet_lookback_days", 3)),
-                    max_results_per_user=per_account,
+                collector = self.collector_factory(
+                    config or load_collector_config(self.storage, self.settings)
                 )
-                add(data["tweets"], data.get("collected_at"))
-                self.storage.save_batch(data, filename="tweets.json")
-            except (ValueError, TwitterAPIError) as e:
-                # No token or X is down: carry on with what the cache had.
+                data = collector.collect_posts(
+                    accounts=missing,
+                    days=int(self._cfg("lookback_days", 3)),
+                    max_results_per_account=per_account,
+                )
+                add(data["posts"], data.get("collected_at"))
+                self.storage.save_batch(data, filename="posts.json")
+            except (ValueError, SourceAPIError) as e:
+                # No token or the source API is down: carry on with what the cache had.
                 logger.warning(json.dumps({"event": "scrape_failed", "accounts": missing, "error": str(e)}))
 
         posts: list[dict[str, Any]] = []
-        for tweets in by_account.values():
-            newest = sorted(tweets.values(), key=lambda t: t.get("created_at") or "", reverse=True)
+        for account_posts in by_account.values():
+            newest = sorted(account_posts.values(), key=lambda t: t.get("created_at") or "", reverse=True)
             posts += newest[:per_account]
         posts.sort(key=lambda t: t.get("created_at") or "", reverse=True)
         posts = posts[: int(self._cfg("max_sources", 60))]
         return [
-            {**t, "source_id": f"X{i}", "text": (t.get("text") or "")[:MAX_SOURCE_CHARS]}
+            {**t, "source_id": f"S{i}", "text": (t.get("text") or "")[:MAX_SOURCE_CHARS]}
             for i, t in enumerate(posts, start=1)
         ]
 
