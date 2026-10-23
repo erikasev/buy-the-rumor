@@ -161,8 +161,8 @@ class S3DataStorage:
         Returns a list of dicts:
         [
             {
-                "key": "collected-data/.../tweets.json",
-                "filename": "tweets.json",
+                "key": "collected-data/.../posts.json",
+                "filename": "posts.json",
                 "data": parsed_content,
                 "last_modified": datetime(...)
             }
@@ -205,7 +205,7 @@ class S3DataStorage:
         self,
         data: Any,
         timestamp: str | None = None,
-        filename: str = "tweets.json",
+        filename: str = "posts.json",
         prefix: str = DEFAULT_PREFIX,
     ) -> str:
         """Upload newly collected data to s3://{bucket}/{prefix}/{timestamp}/{filename}.

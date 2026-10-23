@@ -13,8 +13,8 @@ DRAFT = {
     "leads": [
         {
             "id": "L1",
-            "signal": "Whale wallets moved BTC to exchanges [X1].",
-            "hypothesis": "Possible distribution ahead [X1].",
+            "signal": "Whale wallets moved BTC to exchanges [S1].",
+            "hypothesis": "Possible distribution ahead [S1].",
             "research": ["Check exchange net inflows over 7 days."],
             "expressions": [{"instrument": "crypto", "underlying": "BTC", "idea": "Watch for a breakdown."}],
             "horizon": "days",
@@ -22,12 +22,12 @@ DRAFT = {
             "invalidation": "Inflows reverse.",
         }
     ],
-    "thesis": "On-chain flows hint at selling [X1].",
-    "risks": "Single source [X1].",
+    "thesis": "On-chain flows hint at selling [S1].",
+    "risks": "Single source [S1].",
 }
 RULES = {"allowed_instruments": ["crypto"], "excluded_instruments": ["option"], "max_position_pct": 10}
 SOURCES = [
-    {"source_id": "X1", "author_username": "whale_watch", "text": "BTC inflow", "created_at": "2026-10-21"}
+    {"source_id": "S1", "author_username": "whale_watch", "text": "BTC inflow", "created_at": "2026-10-21"}
 ]
 
 

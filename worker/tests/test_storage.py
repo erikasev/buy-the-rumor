@@ -15,7 +15,7 @@ def test_load_settings_finds_bucket():
 def test_followed_accounts_are_not_in_the_repo():
     # ADR-0001: the account list lives in the bucket (config/sources.json), never in settings.yaml.
     settings = load_settings()
-    assert "twitter" not in settings and "@" not in str(settings)
+    assert "@" not in str(settings)
 
 
 def test_storage_init_from_settings():
@@ -93,7 +93,7 @@ def test_read_batch_files_parses_json():
         {
             "Contents": [
                 {
-                    "Key": "collected-data/2026-10-17T12-00-00Z/tweets.json",
+                    "Key": "collected-data/2026-10-17T12-00-00Z/posts.json",
                     "LastModified": datetime.now(timezone.utc),
                 },
             ]
@@ -101,15 +101,15 @@ def test_read_batch_files_parses_json():
     ]
 
     mock_body = MagicMock()
-    mock_body.read.return_value = b'{"tweets": [{"id": "1", "text": "Fed keeps rates unchanged"}]}'
+    mock_body.read.return_value = b'{"posts": [{"id": "1", "text": "Fed keeps rates unchanged"}]}'
     mock_s3.get_object.return_value = {"Body": mock_body}
 
     storage = S3DataStorage(bucket_name="test-bucket", s3_client=mock_s3)
     files = storage.read_batch_files("collected-data/2026-10-17T12-00-00Z/")
 
     assert len(files) == 1
-    assert files[0]["filename"] == "tweets.json"
-    assert files[0]["data"]["tweets"][0]["id"] == "1"
+    assert files[0]["filename"] == "posts.json"
+    assert files[0]["data"]["posts"][0]["id"] == "1"
 
 
 def test_save_batch_writes_json():

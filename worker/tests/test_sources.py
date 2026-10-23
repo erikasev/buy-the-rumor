@@ -5,7 +5,7 @@ import pytest
 from botocore.exceptions import ClientError
 
 from app.contract import JobFailure
-from app.sources import focus_by_handle, load_sources, sources_config_key
+from app.sources import focus_by_handle, load_sources, private_key
 
 VALID = {"version": 1, "accounts": [{"handle": "@whale_watch", "focus": "On-chain flows"}]}
 
@@ -29,7 +29,7 @@ def test_loads_accounts_from_the_configured_key():
 
 def test_env_overrides_key_and_local_file_replaces_s3(monkeypatch, tmp_path):
     monkeypatch.setenv("SOURCES_KEY", "config/other.json")
-    assert sources_config_key({"sources_key": "config/sources.json"}) == "config/other.json"
+    assert private_key({"sources_key": "config/sources.json"}, "sources", "d") == "config/other.json"
 
     local = tmp_path / "sources.json"
     local.write_text(json.dumps(VALID))

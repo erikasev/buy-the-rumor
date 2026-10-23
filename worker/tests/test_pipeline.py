@@ -2,6 +2,7 @@
 
 import json
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -13,7 +14,8 @@ from app.pipeline import Pipeline, render_brief
 from app.validator import HARD_LIMITS, validate_brief
 
 NOW = datetime(2026, 10, 21, 13, 0, 30, tzinfo=timezone.utc)
-SETTINGS = {"worker": {"top_accounts": 2, "max_tweets_per_account": 2, "max_sources": 10}}
+SETTINGS = {"worker": {"top_accounts": 2, "max_posts_per_account": 2, "max_sources": 10}}
+COLLECTOR_FILE = Path(__file__).parent / "fixtures" / "collector.test.json"
 SOURCES_FILE = {
     "version": 1,
     "accounts": [
@@ -24,13 +26,13 @@ SOURCES_FILE = {
 }
 
 
-def tweet(tid: str, author: str, created: str, text: str = "post") -> dict[str, Any]:
+def post(tid: str, author: str, created: str, text: str = "post") -> dict[str, Any]:
     return {
-        "tweet_id": tid,
+        "post_id": tid,
         "author_username": author,
         "created_at": created,
         "text": text,
-        "url": f"https://x.com/{author}/status/{tid}",
+        "url": f"https://posts.example/{author}/p/{tid}",
         "source_id": "OLD",
     }
 
@@ -38,15 +40,18 @@ def tweet(tid: str, author: str, created: str, text: str = "post") -> dict[str, 
 class FakeStorage:
     bucket_name = "test-bucket"
 
-    def __init__(self, batch_tweets=None, batch_accounts=None):
+    def __init__(self, batch_posts=None, batch_accounts=None):
         self.batch = None
-        if batch_tweets is not None:
-            data = {"collected_at": "2026-10-21T12:00:00Z", "tweets": batch_tweets}
+        if batch_posts is not None:
+            data = {"collected_at": "2026-10-21T12:00:00Z", "posts": batch_posts}
             if batch_accounts is not None:
                 data["accounts"] = batch_accounts
             self.batch = data
         self.saved_batches: list[Any] = []
-        self.objects: dict[str, bytes] = {"config/sources.json": json.dumps(SOURCES_FILE).encode()}
+        self.objects: dict[str, bytes] = {
+            "config/sources.json": json.dumps(SOURCES_FILE).encode(),
+            "config/collector.json": COLLECTOR_FILE.read_bytes(),
+        }
 
     def get(self, key):
         if key not in self.objects:
@@ -59,11 +64,11 @@ class FakeStorage:
         return {"prefix": "collected-data/2026-10-21T12-00-00Z/"} if self.batch else None
 
     def read_batch_files(self, prefix):
-        return [{"filename": "tweets.json", "data": self.batch}]
+        return [{"filename": "posts.json", "data": self.batch}]
 
-    def save_batch(self, data, filename="tweets.json"):
+    def save_batch(self, data, filename="posts.json"):
         self.saved_batches.append(data)
-        return "collected-data/new/tweets.json"
+        return "collected-data/new/posts.json"
 
     def put(self, key, body, content_type):
         self.objects[key] = body
@@ -71,13 +76,13 @@ class FakeStorage:
 
 
 class FakeCollector:
-    def __init__(self, tweets):
-        self.tweets = tweets
+    def __init__(self, posts):
+        self.posts = posts
         self.requested: list[str] = []
 
-    def collect_tweets(self, accounts, days, max_results_per_user):
+    def collect_posts(self, accounts, days, max_results_per_account):
         self.requested += accounts
-        return {"collected_at": "2026-10-21T13:00:00Z", "accounts": accounts, "tweets": self.tweets}
+        return {"collected_at": "2026-10-21T13:00:00Z", "accounts": accounts, "posts": self.posts}
 
 
 class FakeLLM:
@@ -122,8 +127,8 @@ class FakeStore:
 def lead(**changes) -> dict[str, Any]:
     data = {
         "id": "L1",
-        "signal": "5y CDS on two regional banks widened sharply this week [X1][X2].",
-        "hypothesis": "Credit markets may be pricing stress the equity market hasn't [X1].",
+        "signal": "5y CDS on two regional banks widened sharply this week [S1][S2].",
+        "hypothesis": "Credit markets may be pricing stress the equity market hasn't [S1].",
         "research": ["Compare 5y CDS with equity implied volatility for the named banks."],
         "expressions": [{"instrument": "option", "underlying": "KRE", "idea": "Puts 1-2 months out."}],
         "horizon": "1-3 weeks",
@@ -137,8 +142,8 @@ def lead(**changes) -> dict[str, Any]:
 def draft(**changes) -> StrategyDraft:
     data = {
         "leads": [lead()],
-        "thesis": "Credit stress signals in regional banks are worth checking [X1].",
-        "risks": "Two posts is thin evidence [X2].",
+        "thesis": "Credit stress signals in regional banks are worth checking [S1].",
+        "risks": "Two posts is thin evidence [S2].",
     }
     data.update(changes)
     return StrategyDraft.model_validate(data)
@@ -155,18 +160,18 @@ def make(storage=None, llm=None, store=None, collector=None):
         storage=storage or FakeStorage(),
         llm=llm or FakeLLM(draft()),
         store=store,
-        collector_factory=lambda: collector,
+        collector_factory=lambda config: collector,
         settings=SETTINGS,
         now=lambda: NOW,
     )
 
 
 CACHED = [
-    tweet("1", "whale_watch", "2026-10-21T10:00:00Z"),
-    tweet("2", "repo_desk", "2026-10-21T11:00:00Z"),
-    tweet("3", "whale_watch", "2026-10-21T09:00:00Z"),
-    tweet("4", "whale_watch", "2026-10-21T08:00:00Z"),  # over the per-account cap of 2
-    tweet("5", "macro_notes", "2026-10-21T12:00:00Z"),  # not a selected account
+    post("1", "whale_watch", "2026-10-21T10:00:00Z"),
+    post("2", "repo_desk", "2026-10-21T11:00:00Z"),
+    post("3", "whale_watch", "2026-10-21T09:00:00Z"),
+    post("4", "whale_watch", "2026-10-21T08:00:00Z"),  # over the per-account cap of 2
+    post("5", "macro_notes", "2026-10-21T12:00:00Z"),  # not a selected account
 ]
 
 
@@ -174,23 +179,23 @@ def test_cache_hit_filters_to_selected_accounts_caps_and_renumbers():
     collector = FakeCollector([])
     p = make(storage=FakeStorage(CACHED, ["whale_watch", "repo_desk", "macro_notes"]), collector=collector)
     sources = p.collect(["@whale_watch", "@repo_desk"])
-    assert [s["tweet_id"] for s in sources] == ["2", "1", "3"]
-    assert [s["source_id"] for s in sources] == ["X1", "X2", "X3"]
+    assert [s["post_id"] for s in sources] == ["2", "1", "3"]
+    assert [s["source_id"] for s in sources] == ["S1", "S2", "S3"]
     assert collector.requested == []  # nothing missing, so no scrape
 
 
 def test_scrapes_only_accounts_missing_from_cache_and_saves_batch():
-    storage = FakeStorage([tweet("1", "whale_watch", "2026-10-21T10:00:00Z")], ["whale_watch"])
-    collector = FakeCollector([tweet("9", "repo_desk", "2026-10-21T12:30:00Z")])
+    storage = FakeStorage([post("1", "whale_watch", "2026-10-21T10:00:00Z")], ["whale_watch"])
+    collector = FakeCollector([post("9", "repo_desk", "2026-10-21T12:30:00Z")])
     sources = make(storage=storage, collector=collector).collect(["@whale_watch", "@repo_desk"])
     assert collector.requested == ["@repo_desk"]
     assert len(storage.saved_batches) == 1
-    assert [s["tweet_id"] for s in sources] == ["9", "1"]
+    assert [s["post_id"] for s in sources] == ["9", "1"]
 
 
 def test_no_cache_and_no_x_token_gives_no_sources():
-    def no_token():
-        raise ValueError("TWITTER_BEARER_TOKEN not found")
+    def no_token(config):
+        raise ValueError("SOURCES_API_TOKEN not found")
 
     p = make()
     p.collector_factory = no_token
@@ -221,7 +226,7 @@ def test_run_success_stores_brief_at_contract_key(msg):
     # ADR-0001: nothing users receive names a source or carries a citation marker.
     view_raw = storage.objects[key.replace(".md", ".json")].decode()
     for public in (body, view_raw):
-        assert "[X" not in public and "x.com" not in public and "Sources" not in public
+        assert "[S" not in public and "posts.example" not in public and "Sources" not in public
 
     view = BriefView.model_validate_json(view_raw)
     assert view.risk_level == msg.risk_level
@@ -232,8 +237,8 @@ def test_run_success_stores_brief_at_contract_key(msg):
     # The private evidence keeps full traceability.
     evidence = json.loads(storage.objects[key.replace(".md", ".sources.json")])
     assert evidence["job_id"] == msg.job_id
-    assert evidence["draft"]["leads"][0]["signal"].endswith("[X1][X2].")
-    assert evidence["sources"][0]["url"].startswith("https://x.com/")
+    assert evidence["draft"]["leads"][0]["signal"].endswith("[S1][S2].")
+    assert evidence["sources"][0]["url"].startswith("https://posts.example/")
 
 
 def test_user_rules_carry_over_and_tighten_caps(msg):
@@ -295,21 +300,25 @@ def test_lead_without_a_citation_fails(msg):
 
 def test_fake_source_is_rejected(msg):
     store = FakeStore()
-    make(storage=FakeStorage(CACHED), llm=FakeLLM(draft(thesis="Trust me [X99].")), store=store).run(msg)
+    make(storage=FakeStorage(CACHED), llm=FakeLLM(draft(thesis="Trust me [S99].")), store=store).run(msg)
     assert store.events[-1][1] == "LIMIT_EXCEEDED"
-    assert "X99" in store.events[-1][3]
+    assert "S99" in store.events[-1][3]
 
 
 @pytest.mark.parametrize(
     "field,text",
     [
-        ("signal", "A well-known trader @repo_desk says repo is tight [X1]."),
-        ("hypothesis", "See https://x.com/repo_desk/status/1 for details [X1]."),
+        ("signal", "A well-known trader @repo_desk says repo is tight [S1]."),
+        ("hypothesis", "See https://posts.example/repo_desk/p/1 for details [S1]."),
+        ("research", "Search posts.example for more on this [S1]."),  # bare host, from private config
     ],
 )
 def test_naming_a_source_fails(msg, field, text):
     store = FakeStore()
-    make(storage=FakeStorage(CACHED), llm=FakeLLM(draft(leads=[lead(**{field: text})])), store=store).run(msg)
+    value = [text] if field == "research" else text
+    make(storage=FakeStorage(CACHED), llm=FakeLLM(draft(leads=[lead(**{field: value})])), store=store).run(
+        msg
+    )
     assert store.events[-1][1] == "LIMIT_EXCEEDED"
     assert "must not name" in store.events[-1][3]
 
@@ -362,9 +371,9 @@ def test_theme_cannot_inject_frontmatter():
 @pytest.mark.parametrize(
     "text,expected",
     [
-        ("Up [X1].", "Up."),
-        ("Up [X1][X2] and down [X3, X4].", "Up and down."),
-        ("Whole feed [X1-X25] says so.", "Whole feed says so."),
+        ("Up [S1].", "Up."),
+        ("Up [S1][S2] and down [S3, S4].", "Up and down."),
+        ("Whole feed [S1-S25] says so.", "Whole feed says so."),
         ("Keep [brackets] and 50% [sic].", "Keep [brackets] and 50% [sic]."),
     ],
 )

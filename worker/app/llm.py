@@ -1,7 +1,7 @@
 """LLM stages, called through OpenRouter's OpenAI-compatible API.
 
 Stage theme_mapping (cheap model): read the user's trading rules out of their request,
-and pick the X accounts most relevant to it.
+and pick the accounts most relevant to it.
 Stage strategy (strong model): turn collected posts into research leads: signals worth
 investigating and how they could be expressed within the user's rules. Posts are leads,
 never advice (docs/adr/0002-briefs-are-research-leads.md).
@@ -162,7 +162,7 @@ class LLMAgent:
         )
         prompt = (
             f"<user_request>\n{json.dumps(theme)}\n</user_request>\n\n"
-            f"Monitored X accounts:\n{account_lines}\n\n"
+            f"Monitored accounts:\n{account_lines}\n\n"
             f"Pick the {top_n} accounts most useful for researching rumors, sentiment and catalysts "
             f'for the user\'s request. Respond with JSON: {{"accounts": ["@handle", ...]}}'
         )
@@ -324,8 +324,8 @@ class LLMAgent:
             "Writing rules:\n"
             "- Plain text only, no Markdown.\n"
             "- In each lead's signal and hypothesis, cite the source ids it comes from, each in its own "
-            "brackets, e.g. [X3][X7] (checked internally and removed before users see the brief). Ranges "
-            "like [X1-X5] don't count. Cite only ids above.\n"
+            "brackets, e.g. [S3][S7] (checked internally and removed before users see the brief). Ranges "
+            "like [S1-S5] don't count. Cite only ids above.\n"
             "- Never name accounts, handles, people or links. Describe the observation itself.\n"
             "- Hedge appropriately: these are hypotheses to verify, not facts.\n"
             "- thesis (the overview): 2 to 4 sentences tying the leads to the user's request.\n"

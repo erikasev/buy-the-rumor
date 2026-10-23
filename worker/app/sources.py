@@ -1,13 +1,15 @@
-"""The X accounts the worker follows, and what each one covers.
+"""The accounts the worker follows, and what each one covers.
 
-Which sources we use is private (docs/adr/0001-data-sources-stay-internal.md), so the list
-is not in the repo or the image. It lives in the bucket at `config/sources.json`:
+Which sources we use is private (docs/adr/0001-data-sources-stay-internal.md), so neither
+the list nor the collector's API details are in the repo or the image. They live in the
+bucket as private config files, read fresh for every job (edits take effect without a
+redeploy):
 
-    {"version": 1, "accounts": [{"handle": "@someone", "focus": "What they cover"}, ...]}
+    config/sources.json    {"version": 1, "accounts": [{"handle": "@someone", "focus": "..."}]}
+    config/collector.json  the source API's endpoints and field names (app.collector)
 
-It is read fresh for every job, so editing the file takes effect without a redeploy.
-SOURCES_KEY overrides the S3 key; SOURCES_FILE (a local path) replaces S3 for offline runs.
-A missing or invalid list fails the job: the worker never runs without its sources.
+<NAME>_KEY overrides a file's S3 key; <NAME>_FILE (a local path) replaces S3 for offline
+runs. A missing or invalid file fails the job: the worker never runs without its sources.
 """
 
 from __future__ import annotations
@@ -43,25 +45,34 @@ class SourceList(BaseModel):
     accounts: list[Source] = Field(min_length=1, max_length=200)
 
 
-def sources_config_key(settings: dict[str, Any]) -> str:
-    return os.getenv("SOURCES_KEY") or setting(settings, "sources_key", DEFAULT_KEY)
+def private_key(settings: dict[str, Any], name: str, default: str) -> str:
+    """S3 key of a private config file: <NAME>_KEY, else settings `<name>_key`, else `default`."""
+    return os.getenv(f"{name.upper()}_KEY") or setting(settings, f"{name}_key", default)
+
+
+def load_private[M: BaseModel](
+    storage: Any, settings: dict[str, Any], name: str, default: str, model: type[M]
+) -> M:
+    """Load and validate a private config file. Raises JobFailure if it can't be loaded."""
+    local = os.getenv(f"{name.upper()}_FILE")
+    key = private_key(settings, name, default)
+    where = local or f"s3://{storage.bucket_name}/{key}"
+    try:
+        raw = Path(local).read_bytes() if local else storage.get(key)
+        return model.model_validate(json.loads(raw))
+    except (OSError, ClientError, ValueError, ValidationError) as e:
+        # The reason goes to the logs; users only learn that sources aren't configured.
+        logger.error(json.dumps({"event": "config_unavailable", "where": where, "error": str(e)[:500]}))
+        raise JobFailure("theme_mapping", "INTERNAL", "No sources are configured.") from e
 
 
 def load_sources(storage: Any, settings: dict[str, Any]) -> list[Source]:
     """The followed accounts, in file order. Raises JobFailure if the list can't be loaded."""
-    local = os.getenv("SOURCES_FILE")
-    where = local or f"s3://{storage.bucket_name}/{sources_config_key(settings)}"
-    try:
-        raw = Path(local).read_bytes() if local else storage.get(sources_config_key(settings))
-        sources = SourceList.model_validate(json.loads(raw)).accounts
-    except (OSError, ClientError, ValueError, ValidationError) as e:
-        # The reason goes to the logs; users only learn that sources aren't configured.
-        logger.error(json.dumps({"event": "sources_unavailable", "where": where, "error": str(e)[:500]}))
-        raise JobFailure("theme_mapping", "INTERNAL", "No sources are configured.") from e
+    sources = load_private(storage, settings, "sources", DEFAULT_KEY, SourceList).accounts
     handles = [s.handle.lower() for s in sources]
     if len(set(handles)) != len(handles):
         logger.error(
-            json.dumps({"event": "sources_unavailable", "where": where, "error": "duplicate handles"})
+            json.dumps({"event": "config_unavailable", "where": "sources", "error": "duplicate handles"})
         )
         raise JobFailure("theme_mapping", "INTERNAL", "No sources are configured.")
     return sources

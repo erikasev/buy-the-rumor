@@ -1,9 +1,9 @@
 """Settings and secrets for the worker.
 
-Non-secret config (AWS endpoints, X accounts, model names, pipeline knobs) lives in
+Non-secret config (AWS endpoints, model names, pipeline knobs) lives in
 settings.yaml at the repo root; the Docker build copies it into the image.
 
-Secrets (OPENROUTER_API_KEY, TWITTER_BEARER_TOKEN) come from environment variables,
+Secrets (OPENROUTER_API_KEY, SOURCES_API_TOKEN) come from environment variables,
 which Lambda sets in production. For local runs only, they may live in .env.local at
 the repo root. Inside Lambda the .env files are never read.
 """

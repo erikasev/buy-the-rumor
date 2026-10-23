@@ -16,13 +16,13 @@ worker/
     contract.py    Types for the job contract (message, statuses, stages, errors, ULIDs, S3 keys)
     jobs.py        DynamoDB job record, conditional status transitions
     storage.py     S3: collected-data/ batches and brief files
-    twitter.py     X API v2 collector
+    collector.py   Collects recent posts through the source API (details in private config)
     llm.py         OpenRouter LLM stages (rules extraction, account selection, strategist)
     config.py      settings.yaml and secrets (env vars; .env.local locally)
-    sources.py     The followed X accounts, loaded from config/sources.json in the bucket
+    sources.py     The followed accounts and other private config, loaded from the bucket
     brief.py       Brief schema and frontmatter parsing
     validator.py   Hard risk limits and citation checks, enforced in code
-  scripts/         Local tools: run_pipeline.py, enqueue_job.py, collect_tweets.py, check_s3.py
+  scripts/         Local tools: run_pipeline.py, enqueue_job.py, collect_posts.py, check_s3.py
   tests/           pytest; tests/fixtures/ holds sample briefs
   requirements.in  Direct dependencies (edit this)
   requirements.txt Pinned with hashes (generated, never edit by hand)
@@ -53,7 +53,7 @@ python scripts/enqueue_job.py --theme "..."   # send a job to the deployed Lambd
 docker build -f worker/Dockerfile -t btr-worker ..   # (from worker/)
 ```
 
-Config: endpoints, model IDs and pipeline knobs live in `settings.yaml` at the repo root. The followed X accounts and what each covers are private (ADR-0001), so they are **not in the repo or the image**: they live in the bucket at `config/sources.json` (`{"version": 1, "accounts": [{"handle": "@...", "focus": "..."}]}`), read fresh for every job. Edit that file to change them; set `SOURCES_FILE` to a local copy for offline runs. Never commit real handles, including in tests. Secrets (`OPENROUTER_API_KEY`, `TWITTER_BEARER_TOKEN`) are Lambda environment variables; locally they may live in `.env.local`, which is never read inside Lambda and never enters the image.
+Config: endpoints, model IDs and pipeline knobs live in `settings.yaml` at the repo root. Which sources we use is private (ADR-0001), so it is **not in the repo or the image**. Two private files in the bucket hold it, read fresh for every job: `config/sources.json` (the followed accounts and what each covers: `{"version": 1, "accounts": [{"handle": "@...", "focus": "..."}]}`) and `config/collector.json` (the source API's base URL, endpoints and field names; schema in `app/collector.py`). Edit those files to change them; set `SOURCES_FILE` / `COLLECTOR_FILE` to local copies for offline runs. Never commit real handles, source names or API details, including in tests: tests use the made-up API in `tests/fixtures/collector.test.json`. Secrets (`OPENROUTER_API_KEY`, `SOURCES_API_TOKEN`) are Lambda environment variables; locally they may live in `.env.local`, which is never read inside Lambda and never enters the image.
 
 ## Rules
 
@@ -78,4 +78,4 @@ Config: endpoints, model IDs and pipeline knobs live in `settings.yaml` at the r
 - Environment variables are the ones listed in the job contract, including the two secrets.
 - Lambda timeout 5 minutes; SQS visibility timeout 30 minutes (AWS recommends 6x the function timeout for SQS triggers); dead-letter queue `erika-sqs-dlq` after 3 receives (14-day retention).
 - SQS trigger: batch size 1, `ReportBatchItemFailures` on, maximum concurrency 2-5 (caps spend and LLM rate limits). Lambda role: `AWSLambdaSQSQueueExecutionRole` on the queue.
-- IAM: `dynamodb:GetItem`/`UpdateItem` on the table; `s3:ListBucket` on the bucket, `s3:GetObject` on `collected-data/*` and `config/sources.json`, `s3:PutObject` on `collected-data/*` and `briefs/*`.
+- IAM: `dynamodb:GetItem`/`UpdateItem` on the table; `s3:ListBucket` on the bucket, `s3:GetObject` on `collected-data/*`, `config/sources.json` and `config/collector.json`, `s3:PutObject` on `collected-data/*` and `briefs/*`.

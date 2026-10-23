@@ -9,7 +9,7 @@ agent:
   provider: "openrouter" # all LLM calls go through OpenRouter (OPENROUTER_API_KEY)
   base_url: "https://openrouter.ai/api/v1"
   models: # OpenRouter model IDs (<vendor>/<model>)
-    cheap: "google/gemini-2.5-flash-lite" # theme mapping: reads the user's rules, picks X accounts
+    cheap: "google/gemini-2.5-flash-lite" # theme mapping: reads the user's rules, picks accounts
     strong: "google/gemini-2.5-flash" # strategist: research leads, overview and risks
   temperature: 0.1 # Low temperature for disciplined, deterministic trade evaluation
   timeout_seconds: 60 # per LLM call; the SDK retries twice with backoff
@@ -28,18 +28,20 @@ agent:
 # ---------------------------------------------------------
 worker:
   top_accounts: 5 # accounts the LLM picks per theme
-  tweet_lookback_days: 3 # how far back to scrape X
-  max_tweets_per_account: 10 # per account, both when scraping and when reading the cache
+  lookback_days: 3 # how far back to collect posts
+  max_posts_per_account: 10 # per account, both when collecting and when reading the cache
   max_sources: 60 # posts sent to the strategist, newest first (bounds cost)
-  data_max_age_hours: 6 # a collected-data/ batch older than this is ignored; X is scraped instead
+  data_max_age_hours: 6 # a collected-data/ batch older than this is ignored; fresh posts are collected instead
   brief_validity_hours: 6 # expires_at = generated_at + this (hard cap 24)
 
 # ---------------------------------------------------------
-# X accounts
+# Sources
 # ---------------------------------------------------------
-# The followed accounts are private (ADR-0001) and not kept in the repo. They live in the
-# bucket at `sources_key`; edit that file to change them (read fresh for every job).
+# Which sources we use is private (ADR-0001) and not kept in the repo. The followed accounts
+# and the collector's API details live in the bucket at these keys; edit those files to
+# change them (read fresh for every job).
 sources_key: "config/sources.json"
+collector_key: "config/collector.json"
 
 # ---------------------------------------------------------
 # AWS (env vars BRIEFS_BUCKET_NAME, JOBS_TABLE_NAME, JOBS_QUEUE_URL, AWS_REGION override these)

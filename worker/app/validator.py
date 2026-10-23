@@ -25,9 +25,9 @@ HARD_LIMITS = Constraints(
     stop_loss_pct=8,
 )
 
-# ADR-0001: nothing users receive may name a source. Catches URLs, x.com, and @handles
-# (but not email-like text such as a@b).
-_SOURCE_LEAK = re.compile(r"https?://|\bx\.com\b|(?<![\w.])@[A-Za-z0-9_]{2,15}\b")
+# ADR-0001: nothing users receive may name a source. Catches URLs and @handles (but not
+# email-like text such as a@b); the source's own host is passed in from the private config.
+_SOURCE_LEAK = re.compile(r"https?://|(?<![\w.])@[A-Za-z0-9_]{2,15}\b")
 
 # An idea can describe a different instrument than its label ("etf on SPY: buy puts" is an
 # option trade). These catch the clear cases so a mislabel can't slip past the user's rules.
@@ -37,7 +37,7 @@ _IMPLIED_INSTRUMENTS = {
 }
 
 CITATION = re.compile(r"\[([A-Z]+\d+)\]")
-# Any citation-like marker, including ranges and lists such as [X1-X5] or [X1, X2].
+# Any citation-like marker, including ranges and lists such as [S1-S5] or [S1, S2].
 _MARKER = re.compile(r"[ \t]*\[[A-Z]+\d+(?:\s*[-\u2013,]\s*[A-Z]*\d+)*\]")
 
 
@@ -163,12 +163,12 @@ def validate_brief(fm: BriefFrontmatter, now: datetime) -> list[Violation]:
 
 def validate_citations(body: str, source_ids: set[str], require: bool = True) -> list[Violation]:
     """Every [ID] cited in the body must be a source we collected. With `require` (any brief
-    that trades), there must be at least one. Ranges like [X1-X5] don't count as citations."""
+    that trades), there must be at least one. Ranges like [S1-S5] don't count as citations."""
     cited = set(CITATION.findall(body))
     if not cited and require:
         return [
             Violation(
-                "no_citations", "Every trade must be backed by a cited source, written like [X3] (no ranges)."
+                "no_citations", "Every trade must be backed by a cited source, written like [S3] (no ranges)."
             )
         ]
     unknown = sorted(cited - source_ids)
@@ -179,10 +179,12 @@ def validate_citations(body: str, source_ids: set[str], require: bool = True) ->
     return []
 
 
-def validate_public_text(texts: list[str]) -> list[Violation]:
-    """Text users receive must not name a source: no URLs, x.com, or @handles (ADR-0001)."""
+def validate_public_text(texts: list[str], hosts: tuple[str, ...] = ()) -> list[Violation]:
+    """Text users receive must not name a source: no URLs, @handles, or the source's host (ADR-0001)."""
+    names = [h.removeprefix("www.") for h in hosts if h]
+    host_pattern = re.compile("|".join(rf"\b{re.escape(n)}\b" for n in names), re.I) if names else None
     for text in texts:
-        if _SOURCE_LEAK.search(text):
+        if _SOURCE_LEAK.search(text) or (host_pattern and host_pattern.search(text)):
             return [
                 Violation(
                     "source_named", "The brief must not name accounts, handles or links; describe the signal."
